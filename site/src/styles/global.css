@@ -1,0 +1,74 @@
+:root {
+  --void: #070806;
+  --bezel: #10120f;
+  --panel: #0c0e0b;
+  --line: #22261f;
+  --paper: #c9cdb8;
+  --dim: #6a6e62;
+  --phosphor: #8eef6a;
+  --phosphor-dim: #3d7a32;
+  --amber: #e8b44a;
+  --alert: #e85a42;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--void);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background-image:
+    radial-gradient(1200px 700px at 50% -10%, rgba(142, 239, 106, 0.06), transparent 55%),
+    linear-gradient(180deg, #0a0c09 0%, var(--void) 40%);
+}
+
+a {
+  color: var(--phosphor);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  color: #b6ff9a;
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--phosphor);
+  color: var(--void);
+}
+
+.skip {
+  position: absolute;
+  left: 12px;
+  top: -40px;
+  z-index: 20;
+  padding: 6px 10px;
+  background: var(--phosphor);
+  color: var(--void);
+  font-size: 12px;
+}
+
+.skip:focus {
+  top: 12px;
+}

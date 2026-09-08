@@ -60,6 +60,10 @@ arbiter:
       prefer:
         agent: hermes
 
+evaluator:
+  test: ""
+  compile: ""
+
 reflex:
   detectors:
     repeated_error:
@@ -88,3 +92,13 @@ reflex:
       action: switch_agent
     - after: exhausted
       action: human
+
+  # Optional local critic. Invoked only when heuristics return Uncertain.
+  # Default weights: LiquidAI/LFM2.5-2.6B-GGUF Q4_K_M (~1.67GB).
+  # LFM Open License v1.0 — not OSI; free commercial under $10M revenue.
+  # Temper stays Apache-2.0. Weights are not vendored.
+  # Serve via Ollama if present, else: llama-server -hf LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  judge:
+    model: LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+    endpoint: ""
+    auto_pull: false

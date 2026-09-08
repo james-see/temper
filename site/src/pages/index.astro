@@ -1,0 +1,176 @@
+---
+import Base from "../layouts/Base.astro";
+import Terminal from "../components/Terminal.svelte";
+import CopyCmd from "../components/CopyCmd.svelte";
+
+const commands = [
+  ["temper", "open the TUI"],
+  ['temper run "fix the auth tests"', "supervised run"],
+  ['temper run --plain "..."', "no TUI, events on stdout"],
+  ["temper inspect <run-id>", "replay the event stream"],
+  ["temper config show", "agents, providers, reflex"],
+];
+---
+
+<Base
+  title="Temper — adaptive control plane for coding agents"
+  description="The open-source adaptive control plane for coding agents."
+>
+  <header class="top">
+    <p class="mark">TEMPER</p>
+    <nav>
+      <a href="https://github.com/james-see/temper">github</a>
+      <a href="#manual">install</a>
+    </nav>
+  </header>
+
+  <main>
+    <Terminal client:load />
+
+    <p class="line">The open-source adaptive control plane for coding agents.</p>
+
+    <section id="manual" class="manual">
+      <h2>install</h2>
+      <CopyCmd client:idle />
+
+      <h2>commands</h2>
+      <dl>
+        {
+          commands.map(([cmd, note]) => (
+            <div class="cmd">
+              <dt><code>{cmd}</code></dt>
+              <dd>{note}</dd>
+            </div>
+          ))
+        }
+      </dl>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>
+      Temper is <a href="https://github.com/james-see/temper/blob/main/LICENSE">Apache-2.0</a>.
+      <a href="https://github.com/james-see/temper">github.com/james-see/temper</a>
+    </p>
+    <p class="note">
+      Optional local Reflex judge uses LFM2.5 under LFM Open License v1.0 (not OSI;
+      $10M revenue cliff). Temper itself is Apache-2.0. Weights are not vendored.
+    </p>
+  </footer>
+</Base>
+
+<style>
+  .top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 28px 20px 18px;
+  }
+
+  .mark {
+    margin: 0;
+    font-family: var(--display);
+    font-weight: 800;
+    font-size: clamp(28px, 6vw, 44px);
+    letter-spacing: 0.12em;
+    line-height: 0.9;
+    color: var(--phosphor);
+  }
+
+  nav {
+    display: flex;
+    gap: 18px;
+    font-size: 13px;
+  }
+
+  nav a {
+    color: var(--dim);
+    text-decoration: none;
+  }
+
+  nav a:hover {
+    color: var(--phosphor);
+  }
+
+  main {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 20px 48px;
+  }
+
+  .line {
+    margin: 28px 0 0;
+    color: var(--paper);
+    font-size: clamp(16px, 2.4vw, 20px);
+    max-width: 28ch;
+  }
+
+  .manual {
+    margin-top: 40px;
+  }
+
+  h2 {
+    margin: 28px 0 10px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: lowercase;
+    color: var(--dim);
+  }
+
+  dl {
+    margin: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .cmd {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  dt {
+    margin: 0;
+  }
+
+  dt code {
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--paper);
+  }
+
+  dd {
+    margin: 0;
+    color: var(--dim);
+    font-size: 13px;
+  }
+
+  .foot {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 20px 48px;
+    color: var(--dim);
+    font-size: 12px;
+  }
+
+  .foot p {
+    margin: 0 0 10px;
+  }
+
+  .note {
+    max-width: 72ch;
+    line-height: 1.55;
+  }
+
+  @media (max-width: 640px) {
+    .cmd {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+  }
+</style>

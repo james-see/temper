@@ -1,7 +1,7 @@
 package main
 
-import "fmt"
+import "github.com/james-see/temper/internal/cli"
 
 func main() {
-	fmt.Println("temper: adaptive control plane for coding agents")
+	cli.Execute()
 }

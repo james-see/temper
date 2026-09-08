@@ -1,55 +1,8 @@
 # Temper
 
-**The open-source control plane for coding agents.**
+**The open-source adaptive control plane for coding agents.**
 
-Temper is an adaptive meta-harness for AI software engineering. It supervises coding agents and models, measures whether they are actually making progress, detects stalls and loops, changes strategy when needed, and learns from previous runs which agents, models, tools, and workflows work best.
-
-Temper is not another monolithic coding agent. It sits **above** them.
-
-```text
-                              TEMPER
-                 Adaptive Meta-Harness / Control Plane
-                                  │
-                    ┌─────────────┴─────────────┐
-                    │                           │
-               Supervisor                  Evaluator
-          progress / stagnation        tests / compiler / lint
-          loop / regression            diff / acceptance criteria
-          recovery / routing           cost / latency / quality
-                    │                           │
-                    └─────────────┬─────────────┘
-                                  │
-                              ARBITER
-                       routing / policy engine
-                                  │
-             ┌────────────────────┴────────────────────┐
-             │                                         │
-         AGENT LAYER                              NATIVE AGENT
-             │                                         │
- Cursor · Claude Code · Codex · OpenCode · Hermes · Goose · Aider
-             │                                         │
-             └────────────────────┬────────────────────┘
-                                  │
-                             MODEL LAYER
-                                  │
- Anthropic · OpenAI · Gemini · OpenRouter · Bedrock · Groq · xAI · Together
-                       oMLX · Ollama · vLLM · LM Studio
-                     + any OpenAI-compatible provider
-```
-
-## Why Temper?
-
-Modern coding agents still fail in predictable ways:
-
-- repeat the same tool calls or edits
-- cycle between approaches without converging
-- burn tokens while repository state barely changes
-- repeatedly hit the same compiler/test error
-- regress working behavior while trying to fix something else
-- keep using a weak model or agent when another would be better
-- declare success without satisfying acceptance criteria
-
-Temper makes **observable progress** a first-class runtime concept.
+Temper supervises coding agents and models: it measures whether they are making progress, detects stalls and loops, changes strategy, and verifies outcomes. It is not another monolithic coding agent. It sits **above** them.
 
 ```text
 Goal → Plan → Action → Observation → Progress evaluator
@@ -61,163 +14,73 @@ Goal → Plan → Action → Observation → Progress evaluator
                                       └── complete    → verify + stop
 ```
 
-Temper does not need access to a model's hidden reasoning. It evaluates external state: git diffs, tests, compiler errors, tool-call patterns, file activity, acceptance criteria, cost, and other measurable signals.
+## Status
 
-## Core concepts
+**v0.1** — native agent, providers, Reflex baseline, SQLite event store, operator TUI.
 
-### Temper
-The runtime and control plane. It owns runs, workflows, event history, workspaces, checkpoints, budgets, evaluation, and policy execution.
-
-### Arbiter
-The routing and policy engine. Arbiter decides **who should do the work** and can change that decision mid-run.
-
-### Reflex
-The intervention and recovery engine. Reflex answers: **is this run still making progress, and if not, what should happen next?**
-
-Initial detectors include exact repetition, cyclic action sequences, repeated error fingerprints, repository stagnation, regressions, token burn, planning-without-execution loops, and later semantic stagnation.
-
-Recovery actions can include replan, critic/debugger, model switch, agent switch, rollback, fork, or human escalation.
-
-## Agents are not models
-
-Temper deliberately separates **agent runtimes** from **model providers**.
-
-Agents:
-- Cursor Agents
-- Claude Code
-- OpenAI Codex
-- OpenCode
-- Hermes Agent
-- Goose
-- Aider
-- Temper native agent
-- arbitrary external agents through a generic `exec` adapter
-
-Providers:
-- Anthropic
-- OpenAI
-- Google Gemini
-- OpenRouter
-- AWS Bedrock
-- Groq
-- Together
-- xAI
-- **oMLX**
-- **Ollama**
-- vLLM
-- LM Studio
-- OpenAI-compatible endpoints
-
-This allows combinations such as:
-
-```text
-OpenCode → oMLX → local coder model
-Hermes → OpenRouter → hosted model
-Temper Native → Ollama → local model
-Claude Code → Anthropic
-Cursor Agent → configured Cursor model
-```
-
-## Local-first is first-class
-
-```text
-simple task
-   ↓
-OpenCode + local model via oMLX
-   ↓
-progress stalls
-   ↓
-Reflex intervention
-   ↓
-Arbiter escalates to Codex / Claude Code / Cursor
-   ↓
-local model performs final review
-```
-
-Support for oMLX and Ollama is part of the core design, not an afterthought.
-
-## Self-improving, without hand-waving
-
-Temper's initial meaning of "self-improving" is **empirical policy optimization**, not uncontrolled self-modifying code.
-
-Every run produces structured evidence about task classification, agent/model selection, policy versions, tool use, interventions, evaluator results, cost, latency, and final outcome. Historical runs can then improve routing and recovery policies.
-
-## Event-sourced execution
-
-Example events:
-
-```text
-run.started
-task.classified
-plan.created
-agent.started
-model.called
-tool.requested
-tool.completed
-file.modified
-test.executed
-progress.evaluated
-loop.detected
-strategy.changed
-checkpoint.created
-checkpoint.restored
-run.completed
-```
-
-This enables replay, inspection, forking, comparison, offline evaluation, and policy optimization.
-
-Planned CLI:
+## Install
 
 ```bash
-temper run "fix the failing authentication tests"
-temper inspect <run-id>
-temper replay <run-id>
-temper fork <run-id> --at step:42 --agent codex
-temper eval ./benchmarks/go-bugs
-temper learn
+go install github.com/james-see/temper/cmd/temper@latest
 ```
 
-## Initial stack
+## CLI
 
-| Concern | Initial choice |
-|---|---|
-| Runtime | Go |
-| CLI | Cobra |
-| TUI | Bubble Tea |
-| Local state | SQLite |
-| Config | YAML |
-| Workspace isolation | Git worktrees |
-| Tool ecosystem | MCP |
-| Editor/agent connectivity | ACP where useful |
-| Telemetry | OpenTelemetry |
-| Local API | HTTP/WebSocket |
-| Desktop UI later | Tauri + Svelte |
+```bash
+temper                         # TUI splash + goal input
+temper run "fix the auth tests" # live TUI run
+temper run --plain "..."        # CI / no alt screen
+temper inspect <run-id>
+temper config show
+temper config path
+temper version
+```
+
+On a TTY, `temper` and `temper run` open an OpenCode-style TUI (subscriber; runtime is source of truth). `--plain` logs events to stdout.
+
+### Keys
+
+`?` help · `s` status · `e` last progress/loop · `j`/`k` scroll · `g`/`G` top/bottom · `ctrl+c` cancel · `q` quit · `esc` close overlay
+
+## Config
+
+Later wins:
+
+1. defaults
+2. `$XDG_CONFIG_HOME/temper/temper.yaml` or `~/.config/temper/temper.yaml`, plus `~/.temper.yaml`
+3. `./temper.yaml` or `./.temper/config.yaml`
+4. `TEMPER_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+5. `--plain --config --agent --provider --model`
+
+See [`examples/temper.yaml`](examples/temper.yaml). Data dir: `.temper/` in the target repo (`temper.db`, `worktrees/`, `artifacts/`).
+
+## Providers
+
+OpenAI-compatible (OpenAI, oMLX `localhost:8000`), Ollama `/api/chat`, Anthropic Messages, Gemini `generateContent`.
+
+v0.1 agent is **native** only (shell, read, write, patch, search, git). External agents are v0.2.
+
+## Reflex judge
+
+Heuristics are primary. A local SLM is invoked **only** when the assessment is `Uncertain` (or semantic-stagnation).
+
+Default: [LiquidAI/LFM2.5-2.6B-GGUF](https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF) `Q4_K_M` (~1.67GB) via Ollama, else llama.cpp OpenAI-compat. Missing model → heuristics only. Weights are not vendored.
+
+LFM Open License v1.0 is **not OSI** (free commercial under $10M revenue). Temper itself is Apache-2.0.
+
+```bash
+# optional
+llama-server -hf LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+```
 
 ## Docs
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/AGENTS_AND_PROVIDERS.md`](docs/AGENTS_AND_PROVIDERS.md)
-- [`docs/ARBITER.md`](docs/ARBITER.md)
 - [`docs/REFLEX.md`](docs/REFLEX.md)
 - [`docs/EVENT_MODEL.md`](docs/EVENT_MODEL.md)
-- [`docs/SELF_IMPROVEMENT.md`](docs/SELF_IMPROVEMENT.md)
-- [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md)
-- [`docs/SWOT.md`](docs/SWOT.md)
 
-## MVP thesis
-
-> Temper can recognize that a coding agent is no longer making useful progress, intervene intelligently, and measurably improve the probability of task completion.
-
-## What Temper is not
-
-Initially, Temper is not an IDE, code editor, autocomplete engine, GitHub replacement, project-management suite, generic RAG framework, vector database, or custom foundation model.
-
-Temper is the **runtime + supervisor + evaluator + optimizer**.
-
-## Status
-
-**Pre-alpha / architecture phase.**
+Site: [temper.baby](https://temper.baby)
 
 ## License
 
