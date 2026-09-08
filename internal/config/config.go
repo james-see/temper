@@ -127,6 +127,7 @@ type Shell struct {
 
 type Flags struct {
 	Plain    bool
+	Debug    bool
 	Config   string
 	Agent    string
 	Provider string
@@ -367,6 +368,9 @@ func applyFlags(cfg *Config, flags Flags, sources map[string]string) {
 	}
 	if flags.Plain {
 		sources["flags.plain"] = "flag:--plain"
+	}
+	if flags.Debug {
+		sources["flags.debug"] = "flag:--debug"
 	}
 }
 

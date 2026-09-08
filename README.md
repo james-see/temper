@@ -35,6 +35,9 @@ go install github.com/james-see/temper/cmd/temper@latest
 temper                         # TUI splash + goal input
 temper run "fix the auth tests" # live TUI run
 temper run --plain "..."        # CI / no alt screen
+temper debug                   # same as temper, verbose logs
+temper run --debug --plain "..." # events + slog on stderr
+TEMPER_DEBUG=1 temper run "..."
 temper inspect <run-id>
 temper config show
 temper config path
@@ -42,6 +45,8 @@ temper version
 ```
 
 On a TTY, `temper` and `temper run` open an OpenCode-style TUI (subscriber; runtime is source of truth). `--plain` logs events to stdout.
+
+`temper debug` (or `--debug` / `TEMPER_DEBUG=1`) writes verbose slog: provider probes, routing, each tool request/result, reflex assessments, judge skip/call, and state transitions. With the TUI, logs go to `.temper/debug.log` so the alt screen stays clean. `--plain --debug` also writes slog to stderr.
 
 ### Keys
 

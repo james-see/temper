@@ -64,7 +64,7 @@ func (p *Anthropic) complete(ctx context.Context, req Request, ch chan<- Event) 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.key)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
-	resp, err := HTTPClient().Do(httpReq)
+	resp, err := StreamClient().Do(httpReq)
 	if err != nil {
 		return err
 	}

@@ -107,6 +107,12 @@ func HTTPClient() *http.Client {
 	return &http.Client{Timeout: 120 * time.Second}
 }
 
+// StreamClient has no request timeout. Generate streams (local prefill
+// of a 27B model can exceed two minutes) are cancelled via context.
+func StreamClient() *http.Client {
+	return &http.Client{}
+}
+
 func DoJSON(ctx context.Context, method, url, key, bearerFmt string, body io.Reader, extra map[string]string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {

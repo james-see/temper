@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/james-see/temper/internal/config"
+	"github.com/james-see/temper/internal/debuglog"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/run"
@@ -30,6 +32,7 @@ func Execute() {
 func root() *cobra.Command {
 	var (
 		plain   bool
+		debug   bool
 		cfgPath string
 		agent   string
 		prov    string
@@ -44,31 +47,47 @@ func root() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			goal := strings.Join(args, " ")
 			return doRun(cmd.Context(), goal, config.Flags{
-				Plain: plain, Config: cfgPath, Agent: agent, Provider: prov, Model: model,
+				Plain: plain, Debug: debug, Config: cfgPath, Agent: agent, Provider: prov, Model: model,
 			})
 		},
 	}
 	cmd.PersistentFlags().BoolVar(&plain, "plain", false, "log events to stdout (no TUI)")
+	cmd.PersistentFlags().BoolVar(&debug, "debug", false, "verbose slog to stderr and .temper/debug.log")
 	cmd.PersistentFlags().StringVar(&cfgPath, "config", "", "config file")
 	cmd.PersistentFlags().StringVar(&agent, "agent", "", "agent id")
 	cmd.PersistentFlags().StringVar(&prov, "provider", "", "provider id")
 	cmd.PersistentFlags().StringVar(&model, "model", "", "model id")
 
-	cmd.AddCommand(runCmd(&plain, &cfgPath, &agent, &prov, &model))
+	cmd.AddCommand(runCmd(&plain, &debug, &cfgPath, &agent, &prov, &model))
+	cmd.AddCommand(debugCmd(&plain, &debug, &cfgPath, &agent, &prov, &model))
 	cmd.AddCommand(inspectCmd(&plain, &cfgPath))
 	cmd.AddCommand(configCmd(&cfgPath))
 	cmd.AddCommand(versionCmd())
 	return cmd
 }
 
-func runCmd(plain *bool, cfgPath, agent, prov, model *string) *cobra.Command {
+func runCmd(plain, debug *bool, cfgPath, agent, prov, model *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run [goal]",
 		Short: "Execute a supervised coding run",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), strings.Join(args, " "), config.Flags{
-				Plain: *plain, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model,
+				Plain: *plain, Debug: *debug, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model,
+			})
+		},
+	}
+}
+
+func debugCmd(plain, debug *bool, cfgPath, agent, prov, model *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "debug [goal]",
+		Short: "Same as temper, with verbose debug logging",
+		Long:  "Enable verbose slog (routing, tools, reflex, judge, state). TUI stays; logs go to .temper/debug.log. With --plain, logs also go to stderr. Same as TEMPER_DEBUG=1 or --debug.",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return doRun(cmd.Context(), strings.Join(args, " "), config.Flags{
+				Plain: *plain, Debug: true, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model,
 			})
 		},
 	}
@@ -175,14 +194,25 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 	if err != nil {
 		return err
 	}
+	plain := flags.Plain || !isTTY()
+	if debuglog.Requested(flags.Debug) {
+		log, err := debuglog.Setup(config.DataDir(root), !plain)
+		if err != nil {
+			return err
+		}
+		log.Debug("debug enabled", "plain", plain, "log", filepath.Join(config.DataDir(root), "debug.log"))
+	}
 	catalog := provider.Discover(ctx, loaded.Config)
+	if debuglog.Requested(flags.Debug) {
+		for _, c := range catalog.Candidates {
+			slog.Debug("provider.probe", "id", c.ID, "usable", c.Usable, "reason", c.Reason)
+		}
+	}
 	mgr, err := run.Open(loaded.Config, root)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
-
-	plain := flags.Plain || !isTTY()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

@@ -36,29 +36,31 @@ const (
 )
 
 type Snapshot struct {
-	RunID        string
-	Goal         string
-	State        string
-	Agent        string
-	Provider     string
-	Model        string
-	Workspace    string
-	Events       []event.Event
-	Progress     float64
-	Step         int
-	Started      time.Time
-	Reflex       reflex.Assessment
-	RecoveryRung string
-	JudgeOn      bool
-	JudgeUsed    bool
-	TokensWorker int
-	TokensJudge  int
-	BudgetUsed   float64
-	BudgetMax    float64
-	LastEvalSeq  uint64
-	LastLoopSeq  uint64
-	Done         bool
-	Err          string
+	RunID            string
+	Goal             string
+	State            string
+	Agent            string
+	Provider         string
+	Model            string
+	Workspace        string
+	Events           []event.Event
+	Progress         float64
+	Step             int
+	Started          time.Time
+	Reflex           reflex.Assessment
+	RecoveryRung     string
+	JudgeOn          bool
+	JudgeUsed        bool
+	TokensWorker     int
+	TokensPrompt     int
+	TokensCompletion int
+	TokensJudge      int
+	BudgetUsed       float64
+	BudgetMax        float64
+	LastEvalSeq      uint64
+	LastLoopSeq      uint64
+	Done             bool
+	Err              string
 }
 
 type Hub struct {
@@ -235,8 +237,10 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	}
 
 	var prevPass *bool
-	var workerTok, judgeTok int
+	var workerTok, judgeTok, promptTok, complTok int
 	stagnation := 0
+
+	m.debug("routing", "agent", m.rec.Agent, "provider", m.rec.Provider, "model", m.rec.Model, "reasons", dec.Reasons)
 
 	for step := 1; step <= opts.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
@@ -247,16 +251,24 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		}
 		m.Hub.set(func(s *Snapshot) { s.Step = step })
 
+		emit(event.ModelCalled, "native", map[string]any{"model": m.rec.Model, "provider": m.rec.Provider})
+		m.debug("model.generate", "step", step, "model", m.rec.Model, "provider", m.rec.Provider)
 		res := native.Step(ctx)
-		workerTok += res.Usage.PromptTokens + res.Usage.CompletionTokens
+		promptTok += res.Usage.PromptTokens
+		complTok += res.Usage.CompletionTokens
+		workerTok = promptTok + complTok
 		m.Hub.set(func(s *Snapshot) {
 			s.TokensWorker = workerTok
+			s.TokensPrompt = promptTok
+			s.TokensCompletion = complTok
 			s.BudgetUsed = costOf(workerTok, judgeTok)
 		})
 		if res.Err != nil {
 			emit(event.ModelCompleted, "provider", map[string]any{"error": res.Err.Error()})
+			m.debug("model.error", "step", step, "err", res.Err.Error(), "in", res.Usage.PromptTokens, "out", res.Usage.CompletionTokens)
 			if opts.Prov == nil && provider.Retryable(res.Err) {
 				if nxt, ok := m.fallbackProvider(ctx, tried, emit); ok {
+					m.debug("provider.fallback", "provider", m.rec.Provider, "model", m.rec.Model)
 					native = agent.NewNative(nxt, m.rec.Model, ws.Root(), m.Cfg.Shell.Timeout, m.Cfg.Shell.Deny)
 					if _, err := native.Start(ctx, agent.TaskRequest{RunID: id, Prompt: opts.Goal, Workspace: ws.Root(), Model: m.rec.Model}); err != nil {
 						return m.fail(ctx, err)
@@ -266,17 +278,22 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 			}
 			return m.fail(ctx, res.Err)
 		}
-		emit(event.ModelCalled, "native", map[string]any{"model": m.rec.Model, "provider": m.rec.Provider})
 		emit(event.ModelCompleted, "native", map[string]any{
 			"tokens": res.Usage, "tool_calls": len(res.ToolCalls),
 		})
+		m.debug("model.completed", "step", step, "in", res.Usage.PromptTokens, "out", res.Usage.CompletionTokens, "tools", len(res.ToolCalls), "done", res.Done)
 
 		var actionNorms []string
 		var errFPs []string
+		exploratory := false
 		for _, tc := range res.ToolCalls {
 			emit(event.ToolRequested, "native", map[string]any{"tool": tc.Name, "args": clip(tc.Arguments, 400)})
+			m.debug("tool.request", "tool", tc.Name, "args", clip(tc.Arguments, 240))
 			eng.ObserveAction(reflex.NormalizeAction(tc.Name, tc.Arguments))
 			actionNorms = append(actionNorms, reflex.NormalizeAction(tc.Name, tc.Arguments))
+			if reflex.IsExploratory(tc.Name, tc.Arguments) {
+				exploratory = true
+			}
 		}
 		for _, out := range res.ToolOut {
 			payload := map[string]any{"tool": out.Name, "ms": out.Duration.Milliseconds()}
@@ -285,8 +302,10 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 				fp := reflex.FingerprintError(out.Err)
 				eng.ObserveError(fp)
 				errFPs = append(errFPs, fp)
+				m.debug("tool.result", "tool", out.Name, "ms", out.Duration.Milliseconds(), "err", out.Err)
 			} else {
 				payload["output"] = clip(out.Output, 400)
+				m.debug("tool.result", "tool", out.Name, "ms", out.Duration.Milliseconds(), "out", clip(out.Output, 240))
 			}
 			emit(event.ToolCompleted, "native", payload)
 			for _, f := range out.Files {
@@ -315,13 +334,15 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 
 		diff, _ := ws.Status()
 		meaningful := strings.TrimSpace(diff) != ""
-		if !meaningful {
-			stagnation++
-		} else {
+		if meaningful {
 			stagnation = 0
 			if hash, err := ws.Checkpoint(fmt.Sprintf("temper %s step %d", id, step)); err == nil && hash != "" {
 				emit(event.CheckpointCreated, "workspace", map[string]any{"hash": hash})
 			}
+		} else if exploratory {
+			stagnation = 0
+		} else {
+			stagnation++
 		}
 		var passed *bool
 		if len(evals) > 0 {
@@ -329,14 +350,18 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 			passed = &p
 		}
 		assess := eng.Assess(reflex.Signals{
-			Actions:      actionNorms,
-			Errors:       errFPs,
-			Tokens:       workerTok,
-			TokenBurn:    m.Cfg.Reflex.Detectors.TokenBurn.Threshold,
-			EvalPassed:   passed,
-			PrevEvalPass: prevPass,
-			Meaningful:   meaningful,
-			StagnationN:  stagnation,
+			Actions:          actionNorms,
+			Errors:           errFPs,
+			Tokens:           complTok,
+			TokenBurn:        m.Cfg.Reflex.Detectors.TokenBurn.Threshold,
+			PromptTokens:     res.Usage.PromptTokens,
+			CompletionTokens: complTok,
+			EvalPassed:       passed,
+			PrevEvalPass:     prevPass,
+			Meaningful:       meaningful,
+			Exploratory:      exploratory,
+			StagnationN:      stagnation,
+			Step:             step,
 		})
 		if passed != nil {
 			prevPass = passed
@@ -344,6 +369,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 
 		judgeUsed := false
 		if assess.State == reflex.Uncertain && m.Cfg.Reflex.Judge.Model != "" {
+			m.debug("judge.call", "model", m.Cfg.Reflex.Judge.Model, "endpoint", m.Cfg.Reflex.Judge.Endpoint)
 			jr := reflex.InvokeJudge(ctx, m.Cfg.Reflex.Judge.Endpoint, m.Cfg.Reflex.Judge.Model, reflex.JudgeInput{
 				Events:   m.eventDigest(),
 				Tokens:   workerTok,
@@ -358,12 +384,19 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 					assess.Reasons = []string{"judge"}
 				}
 				judgeUsed = true
+			} else if jr.Err != nil {
+				m.debug("judge.error", "err", jr.Err.Error())
 			}
+		} else if assess.State == reflex.Uncertain {
+			m.debug("judge.skip", "reason", "no judge model")
 		}
 
 		emit(event.ProgressEvaluated, "reflex", map[string]any{
 			"state": assess.State, "score": assess.Score, "reasons": assess.Reasons, "judge": judgeUsed,
 		})
+		m.debug("reflex.assess", "step", step, "state", assess.State, "score", assess.Score, "reasons", assess.Reasons,
+			"judge", judgeUsed, "explore", exploratory, "meaningful", meaningful, "stagnation", stagnation,
+			"in", res.Usage.PromptTokens, "out", res.Usage.CompletionTokens)
 		m.Hub.set(func(s *Snapshot) {
 			s.Reflex = assess
 			s.Progress = assess.Score
@@ -374,6 +407,10 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		switch assess.State {
 		case reflex.Complete:
 			return m.complete(ctx)
+		case reflex.Uncertain:
+			// Uncertain is not failure. Keep going, or accept a final answer
+			// when the model stopped and no evaluator is configured.
+			m.debug("reflex.uncertain", "step", step, "continue", true)
 		case reflex.Looping, reflex.Regressing, reflex.Stalled:
 			if assess.State == reflex.Looping {
 				emit(event.LoopDetected, "reflex", assess)
@@ -393,6 +430,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 				return m.rec, err
 			}
 			emit(event.RecoveryStarted, "reflex", map[string]any{"action": action})
+			m.debug("recovery", "action", action, "state", assess.State, "reasons", assess.Reasons)
 			m.Hub.set(func(s *Snapshot) { s.RecoveryRung = action })
 			native.Inject("user", recoveryPrompt(action, opts.Goal, assess))
 			emit(event.StrategyChanged, "reflex", map[string]any{"action": action})
@@ -402,8 +440,11 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		if costOf(workerTok, judgeTok) >= m.Cfg.Temper.Budget.MaxCostPerTask && m.Cfg.Temper.Budget.MaxCostPerTask > 0 {
 			return m.fail(ctx, fmt.Errorf("budget exceeded"))
 		}
-		if res.Done && assess.State == reflex.Progressing && eval.Test == "" && eval.Compile == "" {
-			return m.complete(ctx)
+		if res.Done && eval.Test == "" && eval.Compile == "" {
+			switch assess.State {
+			case reflex.Progressing, reflex.Uncertain, reflex.Complete:
+				return m.complete(ctx)
+			}
 		}
 	}
 	return m.fail(ctx, fmt.Errorf("max steps exceeded"))
@@ -485,7 +526,9 @@ func (m *Manager) Hydrate(r store.Run, evs []event.Event) {
 				Tokens provider.Usage `json:"tokens"`
 			}
 			_ = json.Unmarshal(ev.Data, &d)
-			s.TokensWorker += d.Tokens.PromptTokens + d.Tokens.CompletionTokens
+			s.TokensPrompt += d.Tokens.PromptTokens
+			s.TokensCompletion += d.Tokens.CompletionTokens
+			s.TokensWorker = s.TokensPrompt + s.TokensCompletion
 		}
 	}
 	s.BudgetUsed = costOf(s.TokensWorker, s.TokensJudge)
@@ -513,8 +556,12 @@ func (m *Manager) emit(ctx context.Context, typ, actor string, data any) {
 }
 
 func (m *Manager) transition(ctx context.Context, state string) error {
+	prev := m.rec.State
 	m.rec.State = state
 	m.Hub.set(func(s *Snapshot) { s.State = state })
+	if prev != state {
+		m.debug("state", "from", prev, "to", state)
+	}
 	return m.Store.UpdateRun(ctx, m.rec)
 }
 
@@ -567,6 +614,12 @@ func recoveryPrompt(action, goal string, a reflex.Assessment) string {
 
 func costOf(worker, judge int) float64 {
 	return float64(worker+judge) * 0.000002
+}
+
+func (m *Manager) debug(msg string, args ...any) {
+	if m.Log != nil {
+		m.Log.Debug(msg, args...)
+	}
 }
 
 func terminal(state string) bool {

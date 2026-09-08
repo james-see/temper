@@ -98,7 +98,7 @@ func (p *OpenAI) stream(ctx context.Context, req Request, ch chan<- Event) error
 	if p.key != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+p.key)
 	}
-	resp, err := HTTPClient().Do(httpReq)
+	resp, err := StreamClient().Do(httpReq)
 	if err != nil {
 		return err
 	}

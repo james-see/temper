@@ -67,6 +67,11 @@ Plans or strategy summaries recur while no external action happens.
 ### Semantic stagnation
 Different surface actions produce essentially the same state. Initially use state fingerprints; later optional model-assisted classification.
 
+Do **not** fire this on the first handful of steps, or when the agent is using exploratory tools (`ls`, `pwd`, `read`, `search`, `git log/status/diff`). Those are progress unless the exact same call repeats. `Uncertain` is not failure: continue, or accept a final model answer when no evaluator is configured. Only `Stalled` / `Looping` / `Regressing` start the recovery ladder.
+
+### Token burn
+Count **completion** tokens without progress, not cumulative prompt/prefill. Local models (Ollama/MLX) re-send the transcript each turn; summing prompt tokens looks like a 40k runaway when it is just prefill. A generate still in flight, or a step with `out 0`, is not a stall.
+
 ## Progress score
 
 ```text

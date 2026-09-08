@@ -70,6 +70,109 @@ func TestExecuteDetectsLoop(t *testing.T) {
 	}
 }
 
+func TestExploreThenAnswerCompletes(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Judge.Model = ""
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+
+	n := 0
+	mock := &provider.Mock{
+		Name: "mock",
+		Handler: func(provider.Request) provider.Result {
+			n++
+			switch n {
+			case 1:
+				return provider.Result{
+					ToolCalls: []provider.ToolCall{
+						{ID: "1", Name: "shell", Arguments: `{"command":"ls -la"}`},
+						{ID: "2", Name: "shell", Arguments: `{"command":"pwd"}`},
+					},
+					Usage: provider.Usage{PromptTokens: 664, CompletionTokens: 120},
+				}
+			case 2:
+				return provider.Result{
+					ToolCalls: []provider.ToolCall{
+						{ID: "3", Name: "read", Arguments: `{"path":"README"}`},
+						{ID: "4", Name: "git", Arguments: `{"args":["log","--oneline","-10"]}`},
+					},
+					Usage: provider.Usage{PromptTokens: 1110, CompletionTokens: 142},
+				}
+			default:
+				return provider.Result{
+					Content: "Go repo with a README. Working tree clean.",
+					Usage:   provider.Usage{PromptTokens: 3116, CompletionTokens: 587},
+				}
+			}
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	r, err := mgr.Execute(ctx, Options{Goal: "check on the current folder", Root: dir, Prov: mock, MaxSteps: 10})
+	if err != nil {
+		t.Fatalf("explore run failed: %v", err)
+	}
+	if r.State != StateCompleted {
+		t.Fatalf("want completed got %s", r.State)
+	}
+	evs, err := mgr.Store.ListEvents(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		if ev.Type == event.RunFailed {
+			t.Fatalf("explore must not fail: %s", types(evs))
+		}
+	}
+}
+
+func TestPrefillDoesNotFailRun(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Judge.Model = ""
+	cfg.Reflex.Detectors.TokenBurn.Threshold = 20000
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+
+	n := 0
+	mock := &provider.Mock{
+		Name: "mock",
+		Handler: func(provider.Request) provider.Result {
+			n++
+			if n == 1 {
+				return provider.Result{
+					ToolCalls: []provider.ToolCall{{ID: "1", Name: "read", Arguments: `{"path":"README"}`}},
+					Usage:     provider.Usage{PromptTokens: 39741, CompletionTokens: 80},
+				}
+			}
+			return provider.Result{
+				Content: "readme is short",
+				Usage:   provider.Usage{PromptTokens: 40000, CompletionTokens: 40},
+			}
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	r, err := mgr.Execute(ctx, Options{Goal: "read the readme", Root: dir, Prov: mock, MaxSteps: 6})
+	if err != nil {
+		t.Fatalf("prefill run failed: %v", err)
+	}
+	if r.State != StateCompleted {
+		t.Fatalf("want completed got %s err=%v", r.State, err)
+	}
+}
+
 func types(evs []event.Event) string {
 	b, _ := json.Marshal(func() []string {
 		var t []string

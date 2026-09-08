@@ -575,8 +575,8 @@ func (m Model) footer(snap Snapshot) string {
 	if snap.Done {
 		spin = "•"
 	}
-	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s  tok %d/%d  ·  %s",
-		spin, bar, pct, elapsed, ref, snap.TokensWorker, snap.TokensJudge, m.prefixHint())
+	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s  in %s / out %s  ·  %s",
+		spin, bar, pct, elapsed, ref, compactTok(snap.TokensPrompt), compactTok(snap.TokensCompletion), m.prefixHint())
 }
 
 func (m Model) prefixHint() string {
@@ -602,12 +602,12 @@ provider   %s
 model      %s
 workspace  %s
 budget     %.4f / %.2f
-tokens     worker %d  judge %d
+tokens     in %d  out %d  judge %d
 reflex     %s  %s
 recovery   %s
 judge      %s`,
 		snap.RunID, snap.State, snap.Agent, nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
-		snap.BudgetUsed, snap.BudgetMax, snap.TokensWorker, snap.TokensJudge,
+		snap.BudgetUsed, snap.BudgetMax, snap.TokensPrompt, snap.TokensCompletion, snap.TokensJudge,
 		snap.Reflex.State, strings.Join(snap.Reflex.Reasons, ", "),
 		nz(snap.RecoveryRung, "—"), judge)
 	return overlayBox("status", body, m.width)
@@ -687,6 +687,16 @@ func nz(s, d string) string {
 		return d
 	}
 	return s
+}
+
+func compactTok(n int) string {
+	if n >= 10000 {
+		return fmt.Sprintf("%dk", n/1000)
+	}
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func max(a, b int) int {

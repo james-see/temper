@@ -70,7 +70,7 @@ func (p *Gemini) complete(ctx context.Context, req Request, ch chan<- Event) err
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := HTTPClient().Do(httpReq)
+	resp, err := StreamClient().Do(httpReq)
 	if err != nil {
 		return err
 	}
