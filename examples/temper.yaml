@@ -1,0 +1,90 @@
+temper:
+  budget:
+    max_cost_per_task: 5.00
+  preference:
+    local_first: true
+
+providers:
+  local-mlx:
+    type: omlx
+    url: http://localhost:8000
+
+  ollama:
+    type: ollama
+    url: http://localhost:11434
+
+  anthropic:
+    type: anthropic
+
+  openai:
+    type: openai
+
+  openrouter:
+    type: openrouter
+
+agents:
+  cursor:
+    type: cursor
+
+  claude:
+    type: claude-code
+
+  codex:
+    type: codex
+
+  opencode:
+    type: opencode
+
+  hermes:
+    type: hermes
+
+  native:
+    type: temper
+
+arbiter:
+  policies:
+    - match:
+        complexity: low
+      prefer:
+        agent: opencode
+        provider: local-mlx
+
+    - match:
+        language: go
+        task: bugfix
+      prefer:
+        agent: codex
+
+    - match:
+        task: research
+      prefer:
+        agent: hermes
+
+reflex:
+  detectors:
+    repeated_error:
+      threshold: 3
+
+    action_cycle:
+      repetitions: 2
+
+    stagnation:
+      actions: 6
+
+    token_burn:
+      threshold: 20000
+
+    regression:
+      enabled: true
+
+  recovery:
+    - after: first_stall
+      action: replan
+    - after: second_stall
+      action: critic
+    - after: third_stall
+      action: switch_model
+    - after: fourth_stall
+      action: switch_agent
+    - after: exhausted
+      action: human
