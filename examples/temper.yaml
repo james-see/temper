@@ -2,16 +2,25 @@ temper:
   budget:
     max_cost_per_task: 5.00
   preference:
-    local_first: true
+    local_first: false
+    default_provider: ollama-cloud  # then local ollama, then other keys
 
 providers:
-  local-mlx:
-    type: omlx
-    url: http://localhost:8000
+  ollama-cloud:
+    type: ollama
+    url: https://ollama.com
+    cloud_url: https://ollama.com
+    # api_key:  # or env OLLAMA_API_KEY
 
   ollama:
     type: ollama
     url: http://localhost:11434
+    cloud_url: https://ollama.com
+    # api_key: env OLLAMA_API_KEY
+
+  local-mlx:
+    type: omlx
+    url: http://localhost:8000
 
   anthropic:
     type: anthropic
@@ -47,7 +56,7 @@ arbiter:
         complexity: low
       prefer:
         agent: opencode
-        provider: local-mlx
+        provider: ollama
 
     - match:
         language: go

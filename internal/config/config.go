@@ -12,14 +12,14 @@ import (
 )
 
 type Config struct {
-	Temper    TemperSection            `yaml:"temper"`
-	Providers map[string]Provider      `yaml:"providers"`
-	Agents    map[string]Agent         `yaml:"agents"`
-	Arbiter   Arbiter                  `yaml:"arbiter"`
-	Reflex    Reflex                   `yaml:"reflex"`
-	Evaluator Evaluator                `yaml:"evaluator"`
-	Workspace Workspace                `yaml:"workspace"`
-	Shell     Shell                    `yaml:"shell"`
+	Temper    TemperSection       `yaml:"temper"`
+	Providers map[string]Provider `yaml:"providers"`
+	Agents    map[string]Agent    `yaml:"agents"`
+	Arbiter   Arbiter             `yaml:"arbiter"`
+	Reflex    Reflex              `yaml:"reflex"`
+	Evaluator Evaluator           `yaml:"evaluator"`
+	Workspace Workspace           `yaml:"workspace"`
+	Shell     Shell               `yaml:"shell"`
 }
 
 type TemperSection struct {
@@ -32,13 +32,23 @@ type Budget struct {
 }
 
 type Preference struct {
-	LocalFirst bool `yaml:"local_first"`
+	LocalFirst      bool   `yaml:"local_first"`
+	DefaultProvider string `yaml:"default_provider,omitempty"`
 }
 
 type Provider struct {
-	Type string `yaml:"type"`
-	URL  string `yaml:"url,omitempty"`
-	Key  string `yaml:"key,omitempty"`
+	Type     string `yaml:"type"`
+	URL      string `yaml:"url,omitempty"`
+	CloudURL string `yaml:"cloud_url,omitempty"`
+	Key      string `yaml:"key,omitempty"`
+	APIKey   string `yaml:"api_key,omitempty"`
+}
+
+func (p Provider) AuthKey() string {
+	if p.APIKey != "" {
+		return p.APIKey
+	}
+	return p.Key
 }
 
 type Agent struct {
@@ -67,11 +77,11 @@ type Reflex struct {
 }
 
 type ReflexDetectors struct {
-	RepeatedError DetectorThresh `yaml:"repeated_error"`
-	ActionCycle   DetectorRep    `yaml:"action_cycle"`
+	RepeatedError DetectorThresh  `yaml:"repeated_error"`
+	ActionCycle   DetectorRep     `yaml:"action_cycle"`
 	Stagnation    DetectorActions `yaml:"stagnation"`
-	TokenBurn     DetectorThresh `yaml:"token_burn"`
-	Regression    DetectorFlag   `yaml:"regression"`
+	TokenBurn     DetectorThresh  `yaml:"token_burn"`
+	Regression    DetectorFlag    `yaml:"regression"`
 }
 
 type DetectorThresh struct {
@@ -96,9 +106,9 @@ type RecoveryStep struct {
 }
 
 type Judge struct {
-	Model     string `yaml:"model"`
-	Endpoint  string `yaml:"endpoint"`
-	AutoPull  bool   `yaml:"auto_pull"`
+	Model    string `yaml:"model"`
+	Endpoint string `yaml:"endpoint"`
+	AutoPull bool   `yaml:"auto_pull"`
 }
 
 type Evaluator struct {
@@ -132,16 +142,20 @@ type Loaded struct {
 func Defaults() Config {
 	return Config{
 		Temper: TemperSection{
-			Budget:     Budget{MaxCostPerTask: 5.00},
-			Preference: Preference{LocalFirst: true},
+			Budget: Budget{MaxCostPerTask: 5.00},
+			Preference: Preference{
+				LocalFirst:      false,
+				DefaultProvider: "ollama-cloud",
+			},
 		},
 		Providers: map[string]Provider{
-			"local-mlx": {Type: "omlx", URL: "http://localhost:8000"},
-			"ollama":    {Type: "ollama", URL: "http://localhost:11434"},
-			"anthropic": {Type: "anthropic"},
-			"openai":    {Type: "openai"},
-			"gemini":    {Type: "gemini"},
-			"openrouter": {Type: "openrouter"},
+			"ollama-cloud": {Type: "ollama", URL: "https://ollama.com", CloudURL: "https://ollama.com"},
+			"ollama":       {Type: "ollama", URL: "http://localhost:11434", CloudURL: "https://ollama.com"},
+			"local-mlx":    {Type: "omlx", URL: "http://localhost:8000"},
+			"anthropic":    {Type: "anthropic"},
+			"openai":       {Type: "openai"},
+			"gemini":       {Type: "gemini"},
+			"openrouter":   {Type: "openrouter"},
 		},
 		Agents: map[string]Agent{
 			"native": {Type: "temper"},
@@ -309,6 +323,25 @@ func applyEnv(cfg *Config, sources map[string]string) {
 		cfg.Providers["gemini"] = p
 		sources["providers.gemini.key"] = "env:GEMINI_API_KEY"
 	}
+	if v := os.Getenv("OLLAMA_API_KEY"); v != "" {
+		if cfg.Providers == nil {
+			cfg.Providers = map[string]Provider{}
+		}
+		for _, name := range []string{"ollama", "ollama-cloud"} {
+			p := cfg.Providers[name]
+			p.Type = first(p.Type, "ollama")
+			p.Key = v
+			p.APIKey = v
+			if name == "ollama-cloud" && p.URL == "" {
+				p.URL = "https://ollama.com"
+			}
+			if p.CloudURL == "" {
+				p.CloudURL = "https://ollama.com"
+			}
+			cfg.Providers[name] = p
+			sources["providers."+name+".api_key"] = "env:OLLAMA_API_KEY"
+		}
+	}
 	if v := os.Getenv("TEMPER_JUDGE_MODEL"); v != "" {
 		cfg.Reflex.Judge.Model = v
 		sources["reflex.judge.model"] = "env:TEMPER_JUDGE_MODEL"
@@ -443,6 +476,9 @@ func Redact(cfg Config) Config {
 	for k, p := range cfg.Providers {
 		if p.Key != "" {
 			p.Key = strings.Repeat("*", 8)
+		}
+		if p.APIKey != "" {
+			p.APIKey = strings.Repeat("*", 8)
 		}
 		out.Providers[k] = p
 	}

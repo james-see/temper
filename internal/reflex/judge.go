@@ -34,7 +34,7 @@ Events:
 %s`, in.Tokens, in.Cost, in.EvalNote, trim(in.Events, 4000))
 
 	if endpoint == "" || strings.Contains(endpoint, "11434") || looksOllama(endpoint) {
-		o := provider.NewOllama("judge-ollama", firstURL(endpoint, "http://localhost:11434"))
+		o := provider.NewOllama("judge-ollama", firstURL(endpoint, "http://localhost:11434"), "")
 		content, usage, err := o.ChatJSON(ctx, model, prompt, 150)
 		if err == nil {
 			a, perr := parseAssessment(content)

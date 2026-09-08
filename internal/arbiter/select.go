@@ -1,99 +1,55 @@
 package arbiter
 
 import (
-	"context"
-	"net/http"
-	"strings"
-	"time"
-
 	"github.com/james-see/temper/internal/config"
+	"github.com/james-see/temper/internal/provider"
 )
 
-func Select(cfg config.Config, agent, provider, model string) Decision {
-	if agent == "" && provider == "" && model == "" {
-		agent, provider, model = config.Selected(cfg)
+func Select(cfg config.Config, agent, prov, model string) Decision {
+	explicitProv, explicitModel := prov, model
+	if agent == "" && prov == "" && model == "" {
+		agent, prov, model = config.Selected(cfg)
 	}
 	if agent == "" {
 		agent = "native"
 	}
-	if provider == "" {
-		provider = pickProvider(cfg)
-	}
-	if model == "" {
-		model = defaultModel(cfg, provider)
-	}
-	d := Decision{
-		Selected: Candidate{Agent: agent, Provider: provider, Model: model, Score: 1},
-		Reasons:  []string{"static arbiter: config/flags then local-first"},
-	}
+	st := provider.Discover(nil, cfg)
+	reasons := []string{"probe usable providers; ollama-cloud then local ollama"}
 	if cfg.Temper.Preference.LocalFirst {
-		d.Reasons = append(d.Reasons, "local_first=true")
+		reasons = append(reasons, "local_first=true")
 	}
-	return d
-}
+	if cfg.Temper.Preference.DefaultProvider != "" {
+		reasons = append(reasons, "default_provider="+cfg.Temper.Preference.DefaultProvider)
+	}
 
-func pickProvider(cfg config.Config) string {
-	if cfg.Temper.Preference.LocalFirst {
-		if live(cfg, "local-mlx") {
-			return "local-mlx"
+	if c, ok := st.ByID(prov); ok && !c.Usable && explicitProv == "" {
+		reasons = append(reasons, "ignoring configured "+prov+": "+c.Reason)
+		prov = ""
+	}
+	if prov == "" {
+		if c, ok := st.Preferred(cfg); ok {
+			prov = c.ID
+			reasons = append(reasons, "preferred="+c.ID+" ("+c.Reason+")")
 		}
-		if live(cfg, "ollama") {
-			return "ollama"
-		}
+	} else if c, ok := st.ByID(prov); ok && !c.Usable {
+		reasons = append(reasons, "requested "+prov+" is not usable: "+c.Reason)
 	}
-	if _, ok := cfg.Providers["openai"]; ok {
-		if cfg.Providers["openai"].Key != "" {
-			return "openai"
-		}
-	}
-	if p, ok := cfg.Providers["anthropic"]; ok && p.Key != "" {
-		return "anthropic"
-	}
-	if p, ok := cfg.Providers["gemini"]; ok && p.Key != "" {
-		return "gemini"
-	}
-	for name := range cfg.Providers {
-		return name
-	}
-	return "ollama"
-}
 
-func defaultModel(cfg config.Config, provider string) string {
-	p, ok := cfg.Providers[provider]
-	if !ok {
-		return ""
+	if model == "" && prov != "" {
+		model = provider.DefaultModel(cfg, prov)
 	}
-	switch strings.ToLower(p.Type) {
-	case "omlx":
-		return "local"
-	case "ollama":
-		return "llama3.2"
-	case "openai", "openrouter":
-		return "gpt-4.1-mini"
-	case "anthropic":
-		return "claude-sonnet-4-5"
-	case "gemini":
-		return "gemini-2.5-flash"
-	default:
-		return ""
+	if explicitModel != "" {
+		model = explicitModel
 	}
-}
 
-func live(cfg config.Config, name string) bool {
-	p, ok := cfg.Providers[name]
-	if !ok || p.URL == "" {
-		return false
+	var consideredOut []Candidate
+	for _, c := range st.Usable() {
+		consideredOut = append(consideredOut, Candidate{Provider: c.ID, Score: 1})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.URL, "/")+"/", nil)
-	if err != nil {
-		return false
+
+	return Decision{
+		Selected:   Candidate{Agent: agent, Provider: prov, Model: model, Score: 1},
+		Considered: consideredOut,
+		Reasons:    reasons,
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	_ = resp.Body.Close()
-	return true
 }

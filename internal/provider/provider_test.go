@@ -19,7 +19,7 @@ func TestNewTypes(t *testing.T) {
 	if NewOpenAI("openai", "", "").ID() != "openai" {
 		t.Fatal("openai")
 	}
-	if NewOllama("ollama", "").ID() != "ollama" {
+	if NewOllama("ollama", "", "").ID() != "ollama" {
 		t.Fatal("ollama")
 	}
 	if NewAnthropic("anthropic", "", "").ID() != "anthropic" {

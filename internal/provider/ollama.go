@@ -14,19 +14,24 @@ import (
 type Ollama struct {
 	id  string
 	url string
+	key string
 }
 
-func NewOllama(id, url string) *Ollama {
+func NewOllama(id, url, key string) *Ollama {
 	if url == "" {
-		url = "http://localhost:11434"
+		if id == "ollama-cloud" {
+			url = OllamaCloudURL
+		} else {
+			url = "http://localhost:11434"
+		}
 	}
-	return &Ollama{id: id, url: strings.TrimRight(url, "/")}
+	return &Ollama{id: id, url: strings.TrimRight(url, "/"), key: key}
 }
 
 func (p *Ollama) ID() string { return p.id }
 
 func (p *Ollama) Models(ctx context.Context) ([]Model, error) {
-	b, code, err := DoJSON(ctx, http.MethodGet, p.url+"/api/tags", "", "", nil, nil)
+	b, code, err := DoJSON(ctx, http.MethodGet, p.url+"/api/tags", p.key, "", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +54,8 @@ func (p *Ollama) Models(ctx context.Context) ([]Model, error) {
 }
 
 func (p *Ollama) Capabilities(_ context.Context, _ Model) (Capabilities, error) {
-	return Capabilities{Tools: true, Streaming: true, Local: true}, nil
+	local := strings.Contains(p.url, "localhost") || strings.Contains(p.url, "127.0.0.1")
+	return Capabilities{Tools: true, Streaming: true, Local: local}, nil
 }
 
 func (p *Ollama) Generate(ctx context.Context, req Request) (<-chan Event, error) {
@@ -81,6 +87,9 @@ func (p *Ollama) stream(ctx context.Context, req Request, ch chan<- Event) error
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if p.key != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.key)
+	}
 	resp, err := HTTPClient().Do(httpReq)
 	if err != nil {
 		return err
@@ -98,7 +107,7 @@ func (p *Ollama) stream(ctx context.Context, req Request, ch chan<- Event) error
 	for sc.Scan() {
 		var chunk struct {
 			Message struct {
-				Content string `json:"content"`
+				Content   string `json:"content"`
 				ToolCalls []struct {
 					Function struct {
 						Name      string          `json:"name"`
@@ -181,7 +190,7 @@ func (p *Ollama) ChatJSON(ctx context.Context, model, prompt string, maxTokens i
 		body["options"] = map[string]any{"num_predict": maxTokens}
 	}
 	raw, _ := json.Marshal(body)
-	b, code, err := DoJSON(ctx, http.MethodPost, p.url+"/api/chat", "", "", bytes.NewReader(raw), nil)
+	b, code, err := DoJSON(ctx, http.MethodPost, p.url+"/api/chat", p.key, "", bytes.NewReader(raw), nil)
 	if err != nil {
 		return "", Usage{}, err
 	}

@@ -12,12 +12,13 @@ import (
 
 	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/event"
+	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/run"
 	"github.com/james-see/temper/internal/tui"
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 func Execute() {
 	if err := root().Execute(); err != nil {
@@ -28,11 +29,11 @@ func Execute() {
 
 func root() *cobra.Command {
 	var (
-		plain    bool
-		cfgPath  string
-		agent    string
-		prov     string
-		model    string
+		plain   bool
+		cfgPath string
+		agent   string
+		prov    string
+		model   string
 	)
 	cmd := &cobra.Command{
 		Use:           "temper",
@@ -101,7 +102,7 @@ func inspectCmd(plain *bool, cfgPath *string) *cobra.Command {
 				printEvents(os.Stdout, evs)
 				return nil
 			}
-			return tui.Run("", mgr.Hub, nil, true, nil)
+			return tui.Run(tui.Options{Hub: mgr.Hub, Inspect: true})
 		},
 	}
 }
@@ -174,6 +175,7 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 	if err != nil {
 		return err
 	}
+	catalog := provider.Discover(ctx, loaded.Config)
 	mgr, err := run.Open(loaded.Config, root)
 	if err != nil {
 		return err
@@ -184,31 +186,84 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	start := func(g string) {
+	listModels := func(id string) ([]string, error) {
+		cctx, done := context.WithTimeout(context.Background(), 8*time.Second)
+		defer done()
+		return provider.ModelNames(cctx, loaded.Config, id)
+	}
+
+	if plain {
+		printDiscovery(os.Stdout, catalog)
+		if strings.TrimSpace(goal) == "" {
+			return fmt.Errorf("goal required with --plain")
+		}
+		if flags.Model == "" {
+			return fmt.Errorf("model required with --plain (no picker)")
+		}
+		prov := flags.Provider
+		if prov == "" {
+			if c, ok := catalog.BestCandidate(); ok {
+				prov = c.ID
+			}
+		}
+		if prov == "" {
+			if flags.Provider == "" && flags.Model == "" {
+				return fmt.Errorf("no usable providers; set OLLAMA_API_KEY, start ollama, or pass --provider and --model")
+			}
+			return fmt.Errorf("no usable providers; pass --provider")
+		}
+		go printLive(runCtx, mgr)
+		_, err := mgr.Execute(runCtx, run.Options{
+			Goal: goal, Root: root, Agent: flags.Agent, Provider: prov, Model: flags.Model, Plain: true,
+		})
+		return err
+	}
+
+	start := func(g, prov, model string) {
 		go func() {
 			_, _ = mgr.Execute(runCtx, run.Options{
 				Goal:     g,
 				Root:     root,
 				Agent:    flags.Agent,
-				Provider: flags.Provider,
-				Model:    flags.Model,
-				Plain:    plain,
+				Provider: prov,
+				Model:    model,
+				Plain:    false,
 			})
 		}()
 	}
 
-	if plain {
-		if strings.TrimSpace(goal) == "" {
-			return fmt.Errorf("goal required with --plain")
-		}
-		go printLive(runCtx, mgr)
-		_, err := mgr.Execute(runCtx, run.Options{
-			Goal: goal, Root: root, Agent: flags.Agent, Provider: flags.Provider, Model: flags.Model, Plain: true,
-		})
-		return err
-	}
+	return tui.Run(tui.Options{
+		Goal:       goal,
+		Provider:   flags.Provider,
+		Model:      flags.Model,
+		Hub:        mgr.Hub,
+		Cancel:     cancel,
+		OnStart:    start,
+		Catalog:    catalog,
+		ListModels: listModels,
+	})
+}
 
-	return tui.Run(goal, mgr.Hub, cancel, false, start)
+func printDiscovery(w io.Writer, st provider.Status) {
+	fmt.Fprintln(w, "providers:")
+	if len(st.Candidates) == 0 {
+		fmt.Fprintln(w, "  (none)")
+		return
+	}
+	for _, c := range st.Candidates {
+		state := "no"
+		if c.Usable {
+			state = "usable"
+		}
+		src := c.Reason
+		if c.KeySource != "" {
+			src = src + " (" + c.KeySource + ")"
+		}
+		fmt.Fprintf(w, "  %-14s  %-7s  %s\n", c.ID, state, src)
+	}
+	if st.Best != "" {
+		fmt.Fprintf(w, "preferred: %s\n", st.Best)
+	}
 }
 
 func printLive(ctx context.Context, mgr *run.Manager) {

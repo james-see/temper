@@ -36,29 +36,29 @@ const (
 )
 
 type Snapshot struct {
-	RunID         string
-	Goal          string
-	State         string
-	Agent         string
-	Provider      string
-	Model         string
-	Workspace     string
-	Events        []event.Event
-	Progress      float64
-	Step          int
-	Started       time.Time
-	Reflex        reflex.Assessment
-	RecoveryRung  string
-	JudgeOn       bool
-	JudgeUsed     bool
-	TokensWorker  int
-	TokensJudge   int
-	BudgetUsed    float64
-	BudgetMax     float64
-	LastEvalSeq   uint64
-	LastLoopSeq   uint64
-	Done          bool
-	Err           string
+	RunID        string
+	Goal         string
+	State        string
+	Agent        string
+	Provider     string
+	Model        string
+	Workspace    string
+	Events       []event.Event
+	Progress     float64
+	Step         int
+	Started      time.Time
+	Reflex       reflex.Assessment
+	RecoveryRung string
+	JudgeOn      bool
+	JudgeUsed    bool
+	TokensWorker int
+	TokensJudge  int
+	BudgetUsed   float64
+	BudgetMax    float64
+	LastEvalSeq  uint64
+	LastLoopSeq  uint64
+	Done         bool
+	Err          string
 }
 
 type Hub struct {
@@ -144,6 +144,10 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		return store.Run{}, err
 	}
 	dec := arbiter.Select(m.Cfg, opts.Agent, opts.Provider, opts.Model)
+	tried := map[string]bool{}
+	if dec.Selected.Provider != "" {
+		tried[dec.Selected.Provider] = true
+	}
 	m.rec = store.Run{
 		ID:        id,
 		Goal:      opts.Goal,
@@ -183,9 +187,25 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	prov := opts.Prov
 	if prov == nil {
 		var err error
+		if m.rec.Provider == "" {
+			if c, ok := provider.NextUsable(m.Cfg, tried); ok {
+				m.rec.Provider = c.ID
+				if m.rec.Model == "" {
+					m.rec.Model = provider.DefaultModel(m.Cfg, c.ID)
+				}
+				tried[c.ID] = true
+				dec.Selected.Provider = c.ID
+				dec.Selected.Model = m.rec.Model
+				m.Hub.set(func(s *Snapshot) { s.Provider = c.ID; s.Model = m.rec.Model })
+			}
+		}
 		prov, _, err = provider.Resolve(m.Cfg, m.rec.Provider)
 		if err != nil {
-			return m.fail(ctx, err)
+			if nxt, ok := m.fallbackProvider(ctx, tried, emit); ok {
+				prov = nxt
+			} else {
+				return m.fail(ctx, err)
+			}
 		}
 	}
 	native := agent.NewNative(prov, m.rec.Model, ws.Root(), m.Cfg.Shell.Timeout, m.Cfg.Shell.Deny)
@@ -235,6 +255,15 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		})
 		if res.Err != nil {
 			emit(event.ModelCompleted, "provider", map[string]any{"error": res.Err.Error()})
+			if opts.Prov == nil && provider.Retryable(res.Err) {
+				if nxt, ok := m.fallbackProvider(ctx, tried, emit); ok {
+					native = agent.NewNative(nxt, m.rec.Model, ws.Root(), m.Cfg.Shell.Timeout, m.Cfg.Shell.Deny)
+					if _, err := native.Start(ctx, agent.TaskRequest{RunID: id, Prompt: opts.Goal, Workspace: ws.Root(), Model: m.rec.Model}); err != nil {
+						return m.fail(ctx, err)
+					}
+					continue
+				}
+			}
 			return m.fail(ctx, res.Err)
 		}
 		emit(event.ModelCalled, "native", map[string]any{"model": m.rec.Model, "provider": m.rec.Provider})
@@ -378,6 +407,43 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		}
 	}
 	return m.fail(ctx, fmt.Errorf("max steps exceeded"))
+}
+
+func (m *Manager) fallbackProvider(ctx context.Context, tried map[string]bool, emit func(string, string, any)) (provider.Provider, bool) {
+	c, ok := provider.NextUsable(m.Cfg, tried)
+	if !ok {
+		return nil, false
+	}
+	tried[c.ID] = true
+	p, err := provider.FromConfig(m.Cfg, c.ID)
+	if err != nil {
+		return nil, false
+	}
+	model := m.rec.Model
+	if names, err := provider.ModelNames(ctx, m.Cfg, c.ID); err == nil && len(names) > 0 {
+		found := false
+		for _, n := range names {
+			if n == model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			model = names[0]
+		}
+	} else {
+		model = provider.DefaultModel(m.Cfg, c.ID)
+	}
+	m.rec.Provider = c.ID
+	m.rec.Model = model
+	m.Hub.set(func(s *Snapshot) { s.Provider = c.ID; s.Model = model })
+	_ = m.Store.UpdateRun(ctx, m.rec)
+	emit(event.RoutingDecided, "arbiter", map[string]any{
+		"selected": map[string]string{"provider": c.ID, "model": model},
+		"reasons":  []string{"fallback after provider error", c.Reason},
+	})
+	emit(event.AgentSelected, "arbiter", map[string]any{"provider": c.ID, "model": model})
+	return p, true
 }
 
 func (m *Manager) Load(ctx context.Context, id string) (store.Run, []event.Event, error) {

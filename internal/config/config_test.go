@@ -59,3 +59,20 @@ func TestEnvAndFlags(t *testing.T) {
 		t.Fatal("openai key not applied")
 	}
 }
+
+func TestOllamaAPIKeyEnv(t *testing.T) {
+	t.Setenv("OLLAMA_API_KEY", "ollama-secret")
+	loaded, err := Load(Flags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Config.Providers["ollama"].AuthKey() != "ollama-secret" {
+		t.Fatal("ollama key")
+	}
+	if loaded.Config.Providers["ollama-cloud"].AuthKey() != "ollama-secret" {
+		t.Fatal("ollama-cloud key")
+	}
+	if loaded.Config.Temper.Preference.DefaultProvider != "ollama-cloud" {
+		t.Fatalf("default provider %s", loaded.Config.Temper.Preference.DefaultProvider)
+	}
+}

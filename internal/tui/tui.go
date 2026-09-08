@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/james-see/temper/internal/event"
+	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/run"
 )
 
@@ -18,6 +19,9 @@ type phase int
 
 const (
 	phaseSplash phase = iota
+	phasePickProvider
+	phasePickModel
+	phaseModelInput
 	phaseInput
 	phaseRunning
 	phaseDone
@@ -34,6 +38,34 @@ const (
 
 type tickMsg time.Time
 
+type catalogMsg struct{}
+
+type modelsMsg struct {
+	Models []string
+	Err    error
+}
+
+type pickItem struct {
+	ID     string
+	Title  string
+	Detail string
+	Usable bool
+}
+
+type StartFn func(goal, provider, model string)
+
+type Options struct {
+	Goal       string
+	Provider   string
+	Model      string
+	Hub        *run.Hub
+	Cancel     context.CancelFunc
+	Inspect    bool
+	OnStart    StartFn
+	Catalog    provider.Status
+	ListModels func(providerID string) ([]string, error)
+}
+
 type Model struct {
 	phase    phase
 	overlay  overlay
@@ -41,6 +73,8 @@ type Model struct {
 	spin     spinner.Model
 	vp       viewport.Model
 	goal     string
+	provider string
+	model    string
 	hub      *run.Hub
 	cancel   context.CancelFunc
 	inspect  bool
@@ -49,10 +83,17 @@ type Model struct {
 	start    time.Time
 	ready    bool
 	err      error
-	onStart  func(goal string)
+	onStart  StartFn
+	catalog  provider.Status
+	listFn   func(string) ([]string, error)
+	items    []pickItem
+	cursor   int
+	hint     string
+	prefix   bool
+	models   []string
 }
 
-func New(goal string, hub *run.Hub, cancel context.CancelFunc, inspect bool, onStart func(string)) Model {
+func New(opts Options) Model {
 	ti := textinput.New()
 	ti.Placeholder = "what should temper do?"
 	ti.CharLimit = 500
@@ -64,19 +105,23 @@ func New(goal string, hub *run.Hub, cancel context.CancelFunc, inspect bool, onS
 	s.Style = spinStyle
 
 	m := Model{
-		phase:   phaseSplash,
-		input:   ti,
-		spin:    s,
-		goal:    goal,
-		hub:     hub,
-		cancel:  cancel,
-		inspect: inspect,
-		width:   80,
-		height:  24,
-		start:   time.Now(),
-		onStart: onStart,
+		phase:    phaseSplash,
+		input:    ti,
+		spin:     s,
+		goal:     opts.Goal,
+		provider: opts.Provider,
+		model:    opts.Model,
+		hub:      opts.Hub,
+		cancel:   opts.Cancel,
+		inspect:  opts.Inspect,
+		width:    80,
+		height:   24,
+		start:    time.Now(),
+		onStart:  opts.OnStart,
+		catalog:  opts.Catalog,
+		listFn:   opts.ListModels,
 	}
-	if inspect {
+	if opts.Inspect {
 		m.phase = phaseDone
 	}
 	return m
@@ -97,6 +142,58 @@ func splashWait() tea.Cmd {
 
 func tickEvery() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+func (m Model) fetchModels() tea.Cmd {
+	id := m.provider
+	fn := m.listFn
+	return func() tea.Msg {
+		if fn == nil {
+			return modelsMsg{}
+		}
+		names, err := fn(id)
+		return modelsMsg{Models: names, Err: err}
+	}
+}
+
+func (m Model) advanceSetup() (Model, tea.Cmd) {
+	if m.provider == "" {
+		if c, ok := m.catalog.BestCandidate(); ok && c.Usable {
+			m.provider = c.ID
+		} else {
+			m.phase = phasePickProvider
+			m.items = providerItems(m.catalog)
+			m.cursor = firstUsable(m.items)
+			m.hint = ""
+			if len(m.catalog.Usable()) == 0 {
+				m.hint = "no usable provider — pick a service or set a key"
+			}
+			return m, nil
+		}
+	}
+	if m.model == "" {
+		m.phase = phasePickModel
+		m.items = nil
+		m.cursor = 0
+		m.hint = "loading models…"
+		return m, m.fetchModels()
+	}
+	if m.goal == "" {
+		m.phase = phaseInput
+		m.input.Placeholder = "what should temper do?"
+		m.input.SetValue("")
+		m.input.Focus()
+		return m, textinput.Blink
+	}
+	return m.beginRun()
+}
+
+func (m Model) beginRun() (Model, tea.Cmd) {
+	m.phase = phaseRunning
+	if m.onStart != nil {
+		m.onStart(m.goal, m.provider, m.model)
+	}
+	return m, nil
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -123,14 +220,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseDone
 			return m, nil
 		}
-		if m.goal == "" {
-			m.phase = phaseInput
+		return m.advanceSetup()
+
+	case modelsMsg:
+		if msg.Err != nil {
+			m.hint = msg.Err.Error()
+		} else {
+			m.hint = ""
+		}
+		m.models = msg.Models
+		if len(msg.Models) == 0 {
+			m.phase = phaseModelInput
+			m.input.Placeholder = "model id"
+			m.input.SetValue("")
+			m.input.Focus()
+			if m.hint == "" {
+				m.hint = "no models listed — type a model id"
+			}
 			return m, textinput.Blink
 		}
-		m.phase = phaseRunning
-		if m.onStart != nil {
-			m.onStart(m.goal)
-		}
+		m.phase = phasePickModel
+		m.items = modelItems(msg.Models)
+		m.cursor = 0
 		return m, nil
 
 	case spinner.TickMsg:
@@ -149,108 +260,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickEvery()
 
 	case tea.KeyMsg:
-		if m.overlay == overlayQuit {
-			switch msg.String() {
-			case "y", "Y":
-				if m.cancel != nil {
-					m.cancel()
-				}
-				return m, tea.Quit
-			case "n", "N", "esc":
-				m.overlay = overlayNone
-				return m, nil
-			}
-		}
-		if m.overlay != overlayNone && m.overlay != overlayQuit {
-			switch msg.String() {
-			case "esc", "?", "s":
-				m.overlay = overlayNone
-				return m, nil
-			}
-		}
-		switch msg.String() {
-		case "ctrl+c":
-			if m.cancel != nil {
-				m.cancel()
-			}
-			if m.phase == phaseRunning {
-				return m, nil
-			}
-			return m, tea.Quit
-		case "q":
-			if m.phase == phaseRunning && !m.inspect {
-				m.overlay = overlayQuit
-				return m, nil
-			}
-			return m, tea.Quit
-		case "esc":
-			if m.overlay != overlayNone {
-				m.overlay = overlayNone
-				return m, nil
-			}
-			if m.phase == phaseRunning && !m.inspect {
-				m.overlay = overlayQuit
-				return m, nil
-			}
-			return m, tea.Quit
-		case "?":
-			if m.overlay == overlayHelp {
-				m.overlay = overlayNone
-			} else {
-				m.overlay = overlayHelp
-			}
-			return m, nil
-		case "s":
-			if m.phase != phaseInput {
-				if m.overlay == overlayStatus {
-					m.overlay = overlayNone
-				} else {
-					m.overlay = overlayStatus
-				}
-			}
-			return m, nil
-		case "e":
-			if m.hub != nil && m.ready {
-				snap := m.hub.Get()
-				seq := snap.LastEvalSeq
-				if snap.LastLoopSeq > seq {
-					seq = snap.LastLoopSeq
-				}
-				if seq > 0 {
-					m.vp.SetYOffset(int(seq) - 1)
-				}
-			}
-			return m, nil
-		case "g":
-			m.vp.GotoTop()
-			return m, nil
-		case "G":
-			m.vp.GotoBottom()
-			return m, nil
-		case "j", "down":
-			m.vp.LineDown(1)
-			return m, nil
-		case "k", "up":
-			m.vp.LineUp(1)
-			return m, nil
-		}
-
-		if m.phase == phaseInput {
-			if msg.String() == "enter" {
-				g := strings.TrimSpace(m.input.Value())
-				if g != "" {
-					m.goal = g
-					m.phase = phaseRunning
-					if m.onStart != nil {
-						m.onStart(g)
-					}
-				}
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
-			return m, cmd
-		}
+		next, cmd := m.handleKey(msg)
+		return next, cmd
 	}
 
 	var cmd tea.Cmd
@@ -259,11 +270,182 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if key == "ctrl+c" {
+		if m.cancel != nil {
+			m.cancel()
+		}
+		if m.phase == phaseRunning {
+			return m, nil
+		}
+		return m, tea.Quit
+	}
+
+	if m.overlay == overlayQuit {
+		switch key {
+		case "y", "Y":
+			if m.cancel != nil {
+				m.cancel()
+			}
+			return m, tea.Quit
+		case "n", "N", "esc":
+			m.overlay = overlayNone
+			return m, nil
+		}
+	}
+	if m.overlay != overlayNone && m.overlay != overlayQuit && !m.prefix {
+		switch key {
+		case "esc":
+			m.overlay = overlayNone
+			return m, nil
+		}
+	}
+
+	if m.prefix {
+		m.prefix = false
+		cmd, ok := prefixCommand(key)
+		if !ok {
+			m.hint = "unknown prefix command"
+			return m, nil
+		}
+		return m.runPrefix(cmd)
+	}
+	if isPrefixKey(key) {
+		m.prefix = true
+		return m, nil
+	}
+
+	if pickerPhase(m.phase) {
+		return m.handlePicker(key)
+	}
+
+	if typingPhase(m.phase) {
+		if key == "enter" {
+			v := strings.TrimSpace(m.input.Value())
+			if v == "" {
+				return m, nil
+			}
+			if m.phase == phaseModelInput {
+				m.model = v
+				if m.goal == "" {
+					m.phase = phaseInput
+					m.input.Placeholder = "what should temper do?"
+					m.input.SetValue("")
+					return m, textinput.Blink
+				}
+				return m.beginRun()
+			}
+			m.goal = v
+			return m.beginRun()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+func (m Model) runPrefix(cmd string) (tea.Model, tea.Cmd) {
+	switch cmd {
+	case "cancel":
+		return m, nil
+	case "help":
+		if m.overlay == overlayHelp {
+			m.overlay = overlayNone
+		} else {
+			m.overlay = overlayHelp
+		}
+		return m, nil
+	case "status":
+		if m.overlay == overlayStatus {
+			m.overlay = overlayNone
+		} else {
+			m.overlay = overlayStatus
+		}
+		return m, nil
+	case "eval":
+		if m.hub != nil && m.ready {
+			snap := m.hub.Get()
+			seq := snap.LastEvalSeq
+			if snap.LastLoopSeq > seq {
+				seq = snap.LastLoopSeq
+			}
+			if seq > 0 {
+				m.vp.SetYOffset(int(seq) - 1)
+			}
+		}
+		return m, nil
+	case "quit":
+		if m.phase == phaseRunning && !m.inspect {
+			m.overlay = overlayQuit
+			return m, nil
+		}
+		return m, tea.Quit
+	case "down":
+		m.vp.LineDown(1)
+		return m, nil
+	case "up":
+		m.vp.LineUp(1)
+		return m, nil
+	case "top":
+		m.vp.GotoTop()
+		return m, nil
+	case "bottom":
+		m.vp.GotoBottom()
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) handlePicker(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "j", "down":
+		if m.cursor < len(m.items)-1 {
+			m.cursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		return m, nil
+	case "enter":
+		if m.cursor < 0 || m.cursor >= len(m.items) {
+			return m, nil
+		}
+		it := m.items[m.cursor]
+		if m.phase == phasePickProvider {
+			if !it.Usable {
+				m.hint = it.Detail
+				return m, nil
+			}
+			m.provider = it.ID
+			m.model = ""
+			return m.advanceSetup()
+		}
+		m.model = it.ID
+		if m.goal == "" {
+			m.phase = phaseInput
+			m.input.Placeholder = "what should temper do?"
+			m.input.SetValue("")
+			m.input.Focus()
+			return m, textinput.Blink
+		}
+		return m.beginRun()
+	}
+	return m, nil
+}
+
 func (m Model) View() string {
 	if m.phase == phaseSplash {
 		return m.viewSplash()
 	}
-	if m.phase == phaseInput {
+	if pickerPhase(m.phase) {
+		return m.viewPicker()
+	}
+	if typingPhase(m.phase) {
 		return m.viewInput()
 	}
 	body := m.viewRun()
@@ -283,18 +465,74 @@ func (m Model) viewSplash() string {
 	b.WriteString(wordmarkStyle.Render(wordmark))
 	b.WriteString("\n")
 	b.WriteString(m.spin.View())
-	b.WriteString(dimStyle.Render(" starting runtime..."))
+	b.WriteString(dimStyle.Render("  probing providers…"))
+	if len(m.catalog.Candidates) > 0 {
+		b.WriteString("\n\n")
+		for _, c := range m.catalog.Candidates {
+			mark := "·"
+			if c.Usable {
+				mark = "✓"
+			}
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  %s  %-14s  %s\n", mark, c.ID, c.Reason)))
+		}
+	}
+	return b.String()
+}
+
+func (m Model) viewPicker() string {
+	title := "choose provider"
+	if m.phase == phasePickModel {
+		title = "choose model  ·  " + nz(m.provider, "provider")
+	}
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("TEMPER"))
+	b.WriteString(dimStyle.Render("  ·  " + title))
+	b.WriteString("\n\n")
+	if len(m.items) == 0 {
+		b.WriteString(dimStyle.Render("  loading…"))
+	}
+	for i, it := range m.items {
+		cur := "  "
+		if i == m.cursor {
+			cur = "> "
+		}
+		line := fmt.Sprintf("%s%-16s  %s", cur, it.Title, it.Detail)
+		if i == m.cursor {
+			b.WriteString(bold.Render(line))
+		} else if !it.Usable {
+			b.WriteString(dimStyle.Render(line))
+		} else {
+			b.WriteString(line)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	if m.hint != "" {
+		b.WriteString(yellow.Render(m.hint))
+		b.WriteString("\n")
+	}
+	b.WriteString(dimStyle.Render("j/k move  enter select  " + m.prefixHint()))
 	return b.String()
 }
 
 func (m Model) viewInput() string {
+	title := "new run"
+	if m.phase == phaseModelInput {
+		title = "model  ·  " + nz(m.provider, "provider")
+	} else if m.provider != "" {
+		title = nz(m.provider, "provider") + "  ·  " + nz(m.model, "model")
+	}
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("TEMPER"))
-	b.WriteString(dimStyle.Render("  ·  new run"))
+	b.WriteString(dimStyle.Render("  ·  " + title))
 	b.WriteString("\n\n")
 	b.WriteString(boxStyle.Render(m.input.View()))
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("enter to start  ·  ctrl+c quit  ·  ? help"))
+	if m.hint != "" {
+		b.WriteString(yellow.Render(m.hint))
+		b.WriteString("\n")
+	}
+	b.WriteString(dimStyle.Render("enter to continue  ·  " + m.prefixHint()))
 	return b.String()
 }
 
@@ -307,7 +545,7 @@ func (m Model) viewRun() string {
 		snap.Started = m.start
 	}
 	header := fmt.Sprintf("TEMPER  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
-		short(snap.RunID, 14), snap.State, nz(snap.Agent, "native"), nz(snap.Provider, "—"), nz(snap.Model, "—"))
+		short(snap.RunID, 14), snap.State, nz(snap.Agent, "native"), nz(nz(snap.Provider, m.provider), "—"), nz(nz(snap.Model, m.model), "—"))
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")
@@ -337,8 +575,15 @@ func (m Model) footer(snap Snapshot) string {
 	if snap.Done {
 		spin = "•"
 	}
-	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s  tok %d/%d  ·  ?",
-		spin, bar, pct, elapsed, ref, snap.TokensWorker, snap.TokensJudge)
+	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s  tok %d/%d  ·  %s",
+		spin, bar, pct, elapsed, ref, snap.TokensWorker, snap.TokensJudge, m.prefixHint())
+}
+
+func (m Model) prefixHint() string {
+	if m.prefix {
+		return prefixStyle.Render("prefix") + dimStyle.Render("  s ? e q j k g G")
+	}
+	return "ctrl+b prefix  ·  ctrl+c cancel"
 }
 
 func (m Model) statusOverlay() string {
@@ -361,7 +606,7 @@ tokens     worker %d  judge %d
 reflex     %s  %s
 recovery   %s
 judge      %s`,
-		snap.RunID, snap.State, snap.Agent, snap.Provider, snap.Model, snap.Workspace,
+		snap.RunID, snap.State, snap.Agent, nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
 		snap.BudgetUsed, snap.BudgetMax, snap.TokensWorker, snap.TokensJudge,
 		snap.Reflex.State, strings.Join(snap.Reflex.Reasons, ", "),
 		nz(snap.RecoveryRung, "—"), judge)
@@ -369,14 +614,12 @@ judge      %s`,
 }
 
 func helpOverlay(width int) string {
-	return overlayBox("keys", `?     help
-s     status
-e     last progress.evaluated / loop.detected
-j/k   scroll
-g/G   top / bottom
-^C    cancel
-q     quit
-esc   close overlay / quit prompt`, width)
+	return overlayBox("keys", `ctrl+b  command prefix
+then:   s status  ? help  e last eval
+        j/k scroll  g/G top/bottom
+        q quit  esc cancel prefix
+ctrl+c  cancel run (no prefix)
+enter   select / submit`, width)
 }
 
 func quitOverlay(width int) string {
@@ -460,8 +703,37 @@ func min(a, b int) int {
 	return b
 }
 
-func Run(goal string, hub *run.Hub, cancel context.CancelFunc, inspect bool, onStart func(string)) error {
-	p := tea.NewProgram(New(goal, hub, cancel, inspect, onStart), tea.WithAltScreen())
+func providerItems(st provider.Status) []pickItem {
+	out := make([]pickItem, 0, len(st.Candidates))
+	for _, c := range st.Candidates {
+		detail := c.Reason
+		if !c.Usable && c.Hint != "" {
+			detail = c.Reason + " — " + c.Hint
+		}
+		out = append(out, pickItem{ID: c.ID, Title: c.ID, Detail: detail, Usable: c.Usable})
+	}
+	return out
+}
+
+func modelItems(names []string) []pickItem {
+	out := make([]pickItem, 0, len(names))
+	for _, n := range names {
+		out = append(out, pickItem{ID: n, Title: n, Detail: "", Usable: true})
+	}
+	return out
+}
+
+func firstUsable(items []pickItem) int {
+	for i, it := range items {
+		if it.Usable {
+			return i
+		}
+	}
+	return 0
+}
+
+func Run(opts Options) error {
+	p := tea.NewProgram(New(opts), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }

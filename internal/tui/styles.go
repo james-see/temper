@@ -12,13 +12,14 @@ var (
    ╚═╝   ╚══════╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
 `
 
-	headerStyle = lipgloss.NewStyle().Bold(true)
-	titleStyle  = lipgloss.NewStyle().Bold(true)
-	dimStyle    = lipgloss.NewStyle().Faint(true)
-	spinStyle   = lipgloss.NewStyle()
+	headerStyle   = lipgloss.NewStyle().Bold(true)
+	titleStyle    = lipgloss.NewStyle().Bold(true)
+	dimStyle      = lipgloss.NewStyle().Faint(true)
+	spinStyle     = lipgloss.NewStyle()
 	wordmarkStyle = lipgloss.NewStyle().Bold(true)
-	boxStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	vpStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	prefixStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#1B7F3A", Dark: "#4ADE80"})
+	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	vpStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 
 	green  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#1B7F3A", Dark: "#4ADE80"})
 	yellow = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A16207", Dark: "#FBBF24"})

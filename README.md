@@ -45,7 +45,7 @@ On a TTY, `temper` and `temper run` open an OpenCode-style TUI (subscriber; runt
 
 ### Keys
 
-`?` help · `s` status · `e` last progress/loop · `j`/`k` scroll · `g`/`G` top/bottom · `ctrl+c` cancel · `q` quit · `esc` close overlay
+Command prefix is **ctrl+b** (tmux-style). Letters in the goal prompt always type. After ctrl+b: `s` status · `?` help · `e` last progress/loop · `j`/`k` scroll · `g`/`G` top/bottom · `q` quit · `esc` cancel prefix. `ctrl+c` cancels immediately.
 
 ## Config
 
@@ -54,8 +54,10 @@ Later wins:
 1. defaults
 2. `$XDG_CONFIG_HOME/temper/temper.yaml` or `~/.config/temper/temper.yaml`, plus `~/.temper.yaml`
 3. `./temper.yaml` or `./.temper/config.yaml`
-4. `TEMPER_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+4. `TEMPER_*`, `OLLAMA_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
 5. `--plain --config --agent --provider --model`
+
+Startup probes providers and prefers **Ollama Cloud** (if `OLLAMA_API_KEY` or config key), then local Ollama (`:11434`), then other keys. oMLX/`OPENAI_API_KEY` is never required. TUI lists models; `--plain` prints discovery and requires `--model`.
 
 See [`examples/temper.yaml`](examples/temper.yaml). Data dir: `.temper/` in the target repo (`temper.db`, `worktrees/`, `artifacts/`).
 

@@ -8,11 +8,7 @@ import (
 )
 
 func FromConfig(cfg config.Config, name string) (Provider, error) {
-	p, ok := cfg.Providers[name]
-	if !ok {
-		return nil, fmt.Errorf("unknown provider %q", name)
-	}
-	return New(name, p)
+	return Instant(cfg, name)
 }
 
 func New(id string, p config.Provider) (Provider, error) {
@@ -22,15 +18,22 @@ func New(id string, p config.Provider) (Provider, error) {
 		if p.Type == "openrouter" && url == "" {
 			url = "https://openrouter.ai/api/v1"
 		}
-		return NewOpenAI(id, url, p.Key), nil
+		return NewOpenAI(id, url, p.AuthKey()), nil
 	case "omlx":
-		return NewOMLX(id, p.URL, p.Key), nil
+		return NewOMLX(id, p.URL, p.AuthKey()), nil
 	case "ollama":
-		return NewOllama(id, p.URL), nil
+		url := p.URL
+		if id == "ollama-cloud" && url == "" {
+			url = OllamaCloudURL
+		}
+		if p.CloudURL != "" && id == "ollama-cloud" {
+			url = p.CloudURL
+		}
+		return NewOllama(id, url, p.AuthKey()), nil
 	case "anthropic":
-		return NewAnthropic(id, p.URL, p.Key), nil
+		return NewAnthropic(id, p.URL, p.AuthKey()), nil
 	case "gemini":
-		return NewGemini(id, p.URL, p.Key), nil
+		return NewGemini(id, p.URL, p.AuthKey()), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider type %q", p.Type)
 	}
@@ -41,29 +44,11 @@ func Resolve(cfg config.Config, name string) (Provider, string, error) {
 		p, err := FromConfig(cfg, name)
 		return p, name, err
 	}
-	order := []string{}
-	if cfg.Temper.Preference.LocalFirst {
-		order = append(order, "local-mlx", "ollama")
+	st := Discover(nil, cfg)
+	c, ok := st.Preferred(cfg)
+	if !ok {
+		return nil, "", fmt.Errorf("no usable providers (missing keys / daemons)")
 	}
-	for k := range cfg.Providers {
-		order = append(order, k)
-	}
-	seen := map[string]bool{}
-	var last error
-	for _, k := range order {
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		p, err := FromConfig(cfg, k)
-		if err != nil {
-			last = err
-			continue
-		}
-		return p, k, nil
-	}
-	if last != nil {
-		return nil, "", last
-	}
-	return nil, "", fmt.Errorf("no providers configured")
+	p, err := FromConfig(cfg, c.ID)
+	return p, c.ID, err
 }
