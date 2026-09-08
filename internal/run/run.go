@@ -137,6 +137,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	if opts.MaxSteps <= 0 {
 		opts.MaxSteps = 24
 	}
+	m.seq = 0
 	id := newID()
 	ws, err := workspace.New(opts.Root, config.DataDir(opts.Root))
 	if err != nil {
@@ -280,6 +281,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		}
 		emit(event.ModelCompleted, "native", map[string]any{
 			"tokens": res.Usage, "tool_calls": len(res.ToolCalls),
+			"content": clip(res.Content, 8000),
 		})
 		m.debug("model.completed", "step", step, "in", res.Usage.PromptTokens, "out", res.Usage.CompletionTokens, "tools", len(res.ToolCalls), "done", res.Done)
 

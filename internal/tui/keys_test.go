@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/james-see/temper/internal/event"
+	"github.com/james-see/temper/internal/run"
 )
 
 func TestPrefixCommand(t *testing.T) {
@@ -45,6 +49,50 @@ func TestInputKeysNotCommands(t *testing.T) {
 	}
 	if got.overlay != overlayStatus {
 		t.Fatal("ctrl+b s opens status")
+	}
+}
+
+func TestTabTogglesPane(t *testing.T) {
+	m := New(Options{})
+	m.phase = phaseRunning
+	m.ready = true
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	got := next.(Model)
+	if got.pane != paneIO {
+		t.Fatal("tab -> io")
+	}
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	got = next.(Model)
+	if got.pane != paneLog {
+		t.Fatal("tab -> log")
+	}
+}
+
+func TestDoneEnterNewGoal(t *testing.T) {
+	m := New(Options{Provider: "ollama", Model: "qwen"})
+	m.phase = phaseDone
+	m.goal = "old"
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(Model)
+	if got.phase != phaseInput {
+		t.Fatalf("phase %d", got.phase)
+	}
+	if got.goal != "" {
+		t.Fatal("goal cleared")
+	}
+	if got.provider != "ollama" || got.model != "qwen" {
+		t.Fatal("keep provider/model")
+	}
+}
+
+func TestRenderModelIO(t *testing.T) {
+	data, _ := json.Marshal(map[string]any{"content": "folder has a README", "tool_calls": 0})
+	s := renderModelIO(run.Snapshot{
+		Goal: "what is here",
+		Events: []event.Event{{Type: event.ModelCompleted, Data: data}},
+	}, 80)
+	if !strings.Contains(s, "you") || !strings.Contains(s, "what is here") || !strings.Contains(s, "folder has a README") {
+		t.Fatal(s)
 	}
 }
 

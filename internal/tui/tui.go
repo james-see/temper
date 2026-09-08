@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +35,13 @@ const (
 	overlayHelp
 	overlayStatus
 	overlayQuit
+)
+
+type pane int
+
+const (
+	paneLog pane = iota
+	paneIO
 )
 
 type tickMsg time.Time
@@ -91,6 +99,7 @@ type Model struct {
 	hint     string
 	prefix   bool
 	models   []string
+	pane     pane
 }
 
 func New(opts Options) Model {
@@ -196,6 +205,43 @@ func (m Model) beginRun() (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) toGoalInput() (Model, tea.Cmd) {
+	m.phase = phaseInput
+	m.goal = ""
+	m.overlay = overlayNone
+	m.prefix = false
+	m.hint = ""
+	m.input.Placeholder = "what should temper do?"
+	m.input.SetValue("")
+	m.input.Focus()
+	return m, textinput.Blink
+}
+
+func (m Model) togglePane() (Model, tea.Cmd) {
+	if m.pane == paneLog {
+		m.pane = paneIO
+	} else {
+		m.pane = paneLog
+	}
+	m.syncPane()
+	return m, nil
+}
+
+func (m *Model) syncPane() {
+	if m.hub == nil || !m.ready {
+		return
+	}
+	m.refreshPane(m.hub.Get())
+}
+
+func (m *Model) refreshPane(snap Snapshot) {
+	if m.pane == paneIO {
+		m.vp.SetContent(renderModelIO(snap, m.vp.Width))
+		return
+	}
+	m.vp.SetContent(renderEvents(snap.Events, m.vp.Width))
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	switch msg := msg.(type) {
@@ -252,7 +298,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		if m.hub != nil && m.ready && (m.phase == phaseRunning || m.phase == phaseDone || m.inspect) {
 			snap := m.hub.Get()
-			m.vp.SetContent(renderEvents(snap.Events, m.vp.Width))
+			m.refreshPane(snap)
 			if snap.Done && m.phase == phaseRunning {
 				m.phase = phaseDone
 			}
@@ -320,6 +366,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePicker(key)
 	}
 
+	if (m.phase == phaseRunning || m.phase == phaseDone) && key == "tab" {
+		return m.togglePane()
+	}
+
+	if m.phase == phaseDone && !m.inspect && (key == "enter" || key == "n") {
+		return m.toGoalInput()
+	}
+
 	if typingPhase(m.phase) {
 		if key == "enter" {
 			v := strings.TrimSpace(m.input.Value())
@@ -375,6 +429,21 @@ func (m Model) runPrefix(cmd string) (tea.Model, tea.Cmd) {
 			if seq > 0 {
 				m.vp.SetYOffset(int(seq) - 1)
 			}
+		}
+		return m, nil
+	case "pane":
+		return m.togglePane()
+	case "log":
+		m.pane = paneLog
+		m.syncPane()
+		return m, nil
+	case "io":
+		m.pane = paneIO
+		m.syncPane()
+		return m, nil
+	case "new":
+		if m.phase == phaseDone && !m.inspect {
+			return m.toGoalInput()
 		}
 		return m, nil
 	case "quit":
@@ -544,8 +613,8 @@ func (m Model) viewRun() string {
 	if snap.Started.IsZero() {
 		snap.Started = m.start
 	}
-	header := fmt.Sprintf("TEMPER  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
-		short(snap.RunID, 14), snap.State, nz(snap.Agent, "native"), nz(nz(snap.Provider, m.provider), "—"), nz(nz(snap.Model, m.model), "—"))
+	header := fmt.Sprintf("TEMPER  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
+		short(snap.RunID, 14), snap.State, nz(snap.Agent, "native"), nz(nz(snap.Provider, m.provider), "—"), nz(nz(snap.Model, m.model), "—"), paneLabel(m.pane))
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")
@@ -575,13 +644,19 @@ func (m Model) footer(snap Snapshot) string {
 	if snap.Done {
 		spin = "•"
 	}
+	hint := m.prefixHint()
+	if snap.Done && !m.inspect && !m.prefix {
+		hint = "enter new goal  ·  tab pane  ·  ctrl+c quit"
+	} else if !m.prefix {
+		hint = "tab pane  ·  " + hint
+	}
 	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s  in %s / out %s  ·  %s",
-		spin, bar, pct, elapsed, ref, compactTok(snap.TokensPrompt), compactTok(snap.TokensCompletion), m.prefixHint())
+		spin, bar, pct, elapsed, ref, compactTok(snap.TokensPrompt), compactTok(snap.TokensCompletion), hint)
 }
 
 func (m Model) prefixHint() string {
 	if m.prefix {
-		return prefixStyle.Render("prefix") + dimStyle.Render("  s ? e q j k g G")
+		return prefixStyle.Render("prefix") + dimStyle.Render("  s ? e n t l q j k g G")
 	}
 	return "ctrl+b prefix  ·  ctrl+c cancel"
 }
@@ -616,10 +691,12 @@ judge      %s`,
 func helpOverlay(width int) string {
 	return overlayBox("keys", `ctrl+b  command prefix
 then:   s status  ? help  e last eval
+        t model io  l event log
         j/k scroll  g/G top/bottom
-        q quit  esc cancel prefix
+        n new goal  q quit  esc cancel prefix
+tab     switch log / model io
 ctrl+c  cancel run (no prefix)
-enter   select / submit`, width)
+enter   select / submit / new goal when done`, width)
 }
 
 func quitOverlay(width int) string {
@@ -630,27 +707,221 @@ type Snapshot = run.Snapshot
 
 func snapFrom(s run.Snapshot) Snapshot { return s }
 
+func paneLabel(p pane) string {
+	if p == paneIO {
+		return "io"
+	}
+	return "log"
+}
+
 func renderEvents(evs []event.Event, width int) string {
 	if len(evs) == 0 {
 		return dimStyle.Render("waiting for events…")
 	}
+	if width < 24 {
+		width = 24
+	}
 	var b strings.Builder
 	for _, ev := range evs {
-		line := fmt.Sprintf("%-4d  %s  %s", ev.Sequence, ev.Type, clipData(ev))
-		if width > 8 && len(line) > width-2 {
-			line = line[:width-2]
+		head := fmt.Sprintf("%-4d  %s", ev.Sequence, ev.Type)
+		if extra := eventHeadline(ev); extra != "" {
+			head += "  " + extra
 		}
-		b.WriteString(eventStyle(ev.Type).Render(line))
+		b.WriteString(eventStyle(ev.Type).Render(clipWidth(head, width)))
 		b.WriteString("\n")
+		for _, line := range eventBodyLines(ev, 5, width-6) {
+			b.WriteString(dimStyle.Render("      " + line))
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
 }
 
-func clipData(ev event.Event) string {
-	s := strings.TrimSpace(string(ev.Data))
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 80 {
-		s = s[:80] + "…"
+func renderModelIO(snap Snapshot, width int) string {
+	if width < 24 {
+		width = 24
+	}
+	var b strings.Builder
+	goal := snap.Goal
+	if goal == "" {
+		goal = eventGoal(snap.Events)
+	}
+	if goal != "" {
+		b.WriteString(bold.Render("you"))
+		b.WriteString("\n")
+		for _, line := range wrapLines(goal, width) {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	turns := 0
+	for _, ev := range snap.Events {
+		switch ev.Type {
+		case event.ModelCompleted:
+			var d struct {
+				Content   string `json:"content"`
+				Error     string `json:"error"`
+				ToolCalls int    `json:"tool_calls"`
+			}
+			_ = json.Unmarshal(ev.Data, &d)
+			if d.Error != "" {
+				b.WriteString(red.Render("model error"))
+				b.WriteString("\n")
+				b.WriteString(d.Error)
+				b.WriteString("\n\n")
+				continue
+			}
+			if strings.TrimSpace(d.Content) == "" && d.ToolCalls > 0 {
+				continue
+			}
+			if strings.TrimSpace(d.Content) == "" {
+				continue
+			}
+			turns++
+			b.WriteString(bold.Render("model"))
+			b.WriteString("\n")
+			for _, line := range wrapLines(strings.TrimSpace(d.Content), width) {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		case event.ToolRequested:
+			var d struct {
+				Tool string `json:"tool"`
+				Args string `json:"args"`
+			}
+			_ = json.Unmarshal(ev.Data, &d)
+			cmd := toolArgPreview(d.Args)
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  tool  %s  %s", d.Tool, cmd)))
+			b.WriteString("\n")
+		}
+	}
+	if turns == 0 && goal == "" {
+		return dimStyle.Render("no model output yet")
+	}
+	return b.String()
+}
+
+func eventHeadline(ev event.Event) string {
+	var d map[string]any
+	_ = json.Unmarshal(ev.Data, &d)
+	switch ev.Type {
+	case event.ToolRequested:
+		return fmt.Sprintf("%v  %s", d["tool"], toolArgPreview(asString(d["args"])))
+	case event.ToolCompleted:
+		if err, ok := d["error"].(string); ok && err != "" {
+			return "error"
+		}
+		return fmt.Sprintf("%v  %vms", d["tool"], d["ms"])
+	case event.ModelCompleted:
+		if err, ok := d["error"].(string); ok && err != "" {
+			return "error"
+		}
+		return fmt.Sprintf("tools %v", d["tool_calls"])
+	case event.ProgressEvaluated:
+		return fmt.Sprintf("%v  %v", d["state"], d["reasons"])
+	}
+	return ""
+}
+
+func eventBodyLines(ev event.Event, maxLines, width int) []string {
+	var d map[string]any
+	_ = json.Unmarshal(ev.Data, &d)
+	text := ""
+	switch ev.Type {
+	case event.ToolCompleted:
+		if err, ok := d["error"].(string); ok && err != "" {
+			text = err
+		} else {
+			text = asString(d["output"])
+		}
+	case event.ModelCompleted:
+		if err, ok := d["error"].(string); ok && err != "" {
+			text = err
+		} else {
+			text = asString(d["content"])
+		}
+	default:
+		return nil
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	lines := wrapLines(text, width)
+	if len(lines) > maxLines {
+		kept := lines[:maxLines]
+		kept[maxLines-1] = kept[maxLines-1] + fmt.Sprintf("  +%d", len(lines)-maxLines)
+		return kept
+	}
+	return lines
+}
+
+func eventGoal(evs []event.Event) string {
+	for _, ev := range evs {
+		if ev.Type != event.RunCreated {
+			continue
+		}
+		var d struct {
+			Goal string `json:"goal"`
+		}
+		_ = json.Unmarshal(ev.Data, &d)
+		return d.Goal
+	}
+	return ""
+}
+
+func toolArgPreview(args string) string {
+	var in struct {
+		Command string `json:"command"`
+		Path    string `json:"path"`
+	}
+	if json.Unmarshal([]byte(args), &in) == nil {
+		if in.Command != "" {
+			return in.Command
+		}
+		if in.Path != "" {
+			return in.Path
+		}
+	}
+	return strings.ReplaceAll(strings.TrimSpace(args), "\n", " ")
+}
+
+func asString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+func wrapLines(s string, width int) []string {
+	if width < 8 {
+		width = 8
+	}
+	var out []string
+	for _, raw := range strings.Split(s, "\n") {
+		raw = strings.TrimRight(raw, "\r")
+		if raw == "" {
+			out = append(out, "")
+			continue
+		}
+		for len(raw) > width {
+			out = append(out, raw[:width])
+			raw = raw[width:]
+		}
+		out = append(out, raw)
+	}
+	return out
+}
+
+func clipWidth(s string, width int) string {
+	if width > 0 && len(s) > width {
+		return s[:width]
 	}
 	return s
 }
