@@ -8,9 +8,13 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/run"
 )
+
+func stripANSI(s string) string { return ansi.Strip(s) }
 
 func TestPrefixCommand(t *testing.T) {
 	if !isPrefixKey("ctrl+b") {
@@ -131,9 +135,10 @@ func TestRenderModelIO(t *testing.T) {
 	s := renderModelIO(run.Snapshot{
 		Goal: "what is here",
 		Events: []event.Event{{Type: event.ModelCompleted, Data: data}},
-	}, 80)
-	if !strings.Contains(s, "you") || !strings.Contains(s, "what is here") || !strings.Contains(s, "folder has a README") {
-		t.Fatal(s)
+	}, 80, "")
+	plain := stripANSI(s)
+	if !strings.Contains(plain, "you") || !strings.Contains(plain, "what is") || !strings.Contains(plain, "here") || !strings.Contains(plain, "README") {
+		t.Fatal(plain)
 	}
 	follow, _ := json.Marshal(map[string]any{"text": "now list files"})
 	s = renderModelIO(run.Snapshot{
@@ -142,9 +147,9 @@ func TestRenderModelIO(t *testing.T) {
 			{Type: event.ModelCompleted, Data: data},
 			{Type: event.UserMessage, Data: follow},
 		},
-	}, 80)
-	if !strings.Contains(s, "now list files") {
-		t.Fatal(s)
+	}, 80, "")
+	if !strings.Contains(stripANSI(s), "now list files") {
+		t.Fatal(stripANSI(s))
 	}
 }
 
@@ -214,6 +219,52 @@ func TestDoneArrowsScrollNotType(t *testing.T) {
 	got = next.(Model)
 	if !strings.Contains(got.input.Value(), "x") {
 		t.Fatalf("letters still type: %q", got.input.Value())
+	}
+}
+
+func TestWrapWordsKeepsAllWords(t *testing.T) {
+	long := "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu"
+	lines := wrapWords(long, 20)
+	joined := strings.Join(lines, " ")
+	for _, w := range strings.Fields(long) {
+		if !strings.Contains(joined, w) {
+			t.Fatalf("missing %q in %q", w, joined)
+		}
+	}
+	for _, line := range lines {
+		if lipgloss.Width(line) > 20 {
+			t.Fatalf("line %q is %d cells", line, lipgloss.Width(line))
+		}
+	}
+}
+
+func TestPaneInnerWidthAccountsForFrame(t *testing.T) {
+	vp := viewport.New(40, 8)
+	vp.Style = vpStyle
+	inner := paneInnerWidth(vp)
+	if inner >= 40 {
+		t.Fatalf("inner %d should be smaller than viewport width", inner)
+	}
+	if inner < 8 {
+		t.Fatalf("inner %d", inner)
+	}
+}
+
+func TestChatWaitingLine(t *testing.T) {
+	s := renderModelIO(run.Snapshot{Goal: "hi"}, 40, "⠋  ✦  composing")
+	if !strings.Contains(s, "composing") || !strings.Contains(s, "model") {
+		t.Fatal(s)
+	}
+}
+
+func TestMarkdownHeadingSurvives(t *testing.T) {
+	data, _ := json.Marshal(map[string]any{"content": "## Hello\n\nThis is **bold** copy.", "tool_calls": 0})
+	s := renderModelIO(run.Snapshot{
+		Events: []event.Event{{Type: event.ModelCompleted, Data: data}},
+	}, 60, "")
+	plain := stripANSI(s)
+	if !strings.Contains(plain, "Hello") || !strings.Contains(plain, "bold") {
+		t.Fatal(plain)
 	}
 }
 

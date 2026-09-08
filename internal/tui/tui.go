@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/run"
@@ -286,14 +287,28 @@ func (m *Model) syncPane() {
 }
 
 func (m *Model) refreshPane(snap Snapshot) {
+	inner := paneInnerWidth(m.vp)
 	if m.pane == paneIO {
-		m.vp.SetContent(renderModelIO(snap, m.vp.Width))
+		wait := ""
+		if !snap.Done && m.phase == phaseRunning {
+			wait = m.chatWaitLine()
+		}
+		m.vp.SetContent(renderModelIO(snap, inner, wait))
 	} else {
-		m.vp.SetContent(renderEvents(snap.Events, m.vp.Width))
+		m.vp.SetContent(renderEvents(snap.Events, inner))
 	}
 	if m.follow {
 		m.vp.GotoBottom()
 	}
+}
+
+func (m Model) chatWaitLine() string {
+	sparks := []string{"✦", "✧", "✶", "⋆", "✦", "·"}
+	i := int(time.Since(m.start)/(140*time.Millisecond)) % len(sparks)
+	if i < 0 {
+		i = 0
+	}
+	return m.spin.View() + "  " + sparks[i] + "  composing"
 }
 
 func (m *Model) pinFollow() {
@@ -884,7 +899,7 @@ func renderEvents(evs []event.Event, width int) string {
 	return b.String()
 }
 
-func renderModelIO(snap Snapshot, width int) string {
+func renderModelIO(snap Snapshot, width int, waiting string) string {
 	if width < 24 {
 		width = 24
 	}
@@ -894,13 +909,7 @@ func renderModelIO(snap Snapshot, width int) string {
 		goal = eventGoal(snap.Events)
 	}
 	if goal != "" {
-		b.WriteString(bold.Render("you"))
-		b.WriteString("\n")
-		for _, line := range wrapLines(goal, width) {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
+		writeChatTurn(&b, "you", goal, width, true)
 	}
 	turns := 0
 	for _, ev := range snap.Events {
@@ -914,13 +923,7 @@ func renderModelIO(snap Snapshot, width int) string {
 				continue
 			}
 			turns++
-			b.WriteString(bold.Render("you"))
-			b.WriteString("\n")
-			for _, line := range wrapLines(strings.TrimSpace(d.Text), width) {
-				b.WriteString(line)
-				b.WriteString("\n")
-			}
-			b.WriteString("\n")
+			writeChatTurn(&b, "you", strings.TrimSpace(d.Text), width, true)
 		case event.ModelCompleted:
 			var d struct {
 				Content   string `json:"content"`
@@ -929,10 +932,7 @@ func renderModelIO(snap Snapshot, width int) string {
 			}
 			_ = json.Unmarshal(ev.Data, &d)
 			if d.Error != "" {
-				b.WriteString(red.Render("model error"))
-				b.WriteString("\n")
-				b.WriteString(d.Error)
-				b.WriteString("\n\n")
+				writeChatTurn(&b, "model", d.Error, width, false)
 				continue
 			}
 			if strings.TrimSpace(d.Content) == "" && d.ToolCalls > 0 {
@@ -942,13 +942,7 @@ func renderModelIO(snap Snapshot, width int) string {
 				continue
 			}
 			turns++
-			b.WriteString(bold.Render("model"))
-			b.WriteString("\n")
-			for _, line := range wrapLines(strings.TrimSpace(d.Content), width) {
-				b.WriteString(line)
-				b.WriteString("\n")
-			}
-			b.WriteString("\n")
+			writeChatTurn(&b, "model", strings.TrimSpace(d.Content), width, true)
 		case event.ToolRequested:
 			var d struct {
 				Tool string `json:"tool"`
@@ -956,14 +950,65 @@ func renderModelIO(snap Snapshot, width int) string {
 			}
 			_ = json.Unmarshal(ev.Data, &d)
 			cmd := toolArgPreview(d.Args)
-			b.WriteString(dimStyle.Render(fmt.Sprintf("  tool  %s  %s", d.Tool, cmd)))
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  ·  %s  %s", d.Tool, cmd)))
 			b.WriteString("\n")
 		}
 	}
-	if turns == 0 && goal == "" {
+	if waiting != "" {
+		writeChatWait(&b, waiting, width)
+	}
+	if turns == 0 && goal == "" && waiting == "" {
 		return dimStyle.Render("no model output yet")
 	}
 	return b.String()
+}
+
+func writeChatTurn(b *strings.Builder, role, body string, width int, markdown bool) {
+	chip, bar := youChip, youBar
+	if role == "model" {
+		chip, bar = modelChip, modelBar
+	}
+	b.WriteString(chip.Render(role))
+	b.WriteString("\n")
+	body = strings.TrimSpace(body)
+	if body == "" {
+		b.WriteString("\n")
+		return
+	}
+	writeChatBody(b, bar, body, width, markdown)
+}
+
+func writeChatWait(b *strings.Builder, waiting string, width int) {
+	b.WriteString(modelChip.Render("model"))
+	b.WriteString("\n")
+	writeChatBody(b, modelBar, waiting, width, false)
+}
+
+func writeChatBody(b *strings.Builder, bar lipgloss.Style, body string, width int, markdown bool) {
+	prefixW := 2
+	inner := width - prefixW
+	if inner < 8 {
+		inner = 8
+	}
+	text := body
+	if markdown {
+		text = renderMarkdown(body, inner)
+	} else {
+		text = strings.Join(wrapWords(body, inner), "\n")
+	}
+	paint := func(line string) string {
+		if !markdown && strings.Contains(body, "composing") {
+			return waitStyle.Render(line)
+		}
+		return line
+	}
+	for _, line := range strings.Split(text, "\n") {
+		b.WriteString(bar.Render("▍"))
+		b.WriteString(" ")
+		b.WriteString(paint(line))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 }
 
 func eventHeadline(ev event.Event) string {
@@ -1066,32 +1111,6 @@ func asString(v any) string {
 	}
 }
 
-func wrapLines(s string, width int) []string {
-	if width < 8 {
-		width = 8
-	}
-	var out []string
-	for _, raw := range strings.Split(s, "\n") {
-		raw = strings.TrimRight(raw, "\r")
-		if raw == "" {
-			out = append(out, "")
-			continue
-		}
-		for len(raw) > width {
-			out = append(out, raw[:width])
-			raw = raw[width:]
-		}
-		out = append(out, raw)
-	}
-	return out
-}
-
-func clipWidth(s string, width int) string {
-	if width > 0 && len(s) > width {
-		return s[:width]
-	}
-	return s
-}
 
 func progressBar(width, pct int) string {
 	if width < 4 {
