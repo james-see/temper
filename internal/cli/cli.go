@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/james-see/temper/internal/agent"
 	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/debuglog"
 	"github.com/james-see/temper/internal/event"
@@ -20,7 +21,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.1.7"
+const Version = "0.1.8"
 
 func Execute() {
 	if err := root().Execute(); err != nil {
@@ -45,8 +46,7 @@ func root() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			goal := strings.Join(args, " ")
-			return doRun(cmd.Context(), goal, config.Flags{
+			return doRun(cmd.Context(), args, config.Flags{
 				Plain: plain, Debug: debug, Config: cfgPath, Agent: agent, Provider: prov, Model: model,
 			})
 		},
@@ -72,7 +72,7 @@ func runCmd(plain, debug *bool, cfgPath, agent, prov, model *string) *cobra.Comm
 		Short: "Execute a supervised coding run",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return doRun(cmd.Context(), strings.Join(args, " "), config.Flags{
+			return doRun(cmd.Context(), args, config.Flags{
 				Plain: *plain, Debug: *debug, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model,
 			})
 		},
@@ -86,7 +86,7 @@ func debugCmd(plain, debug *bool, cfgPath, agent, prov, model *string) *cobra.Co
 		Long:  "Enable verbose slog (routing, tools, reflex, judge, state). TUI stays; logs go to .temper/debug.log. With --plain, logs also go to stderr. Same as TEMPER_DEBUG=1 or --debug.",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return doRun(cmd.Context(), strings.Join(args, " "), config.Flags{
+			return doRun(cmd.Context(), args, config.Flags{
 				Plain: *plain, Debug: true, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model,
 			})
 		},
@@ -185,10 +185,17 @@ func versionCmd() *cobra.Command {
 	}
 }
 
-func doRun(ctx context.Context, goal string, flags config.Flags) error {
+func doRun(ctx context.Context, args []string, flags config.Flags) error {
 	loaded, err := config.Load(flags)
 	if err != nil {
 		return err
+	}
+	agentID, goal, err := splitAgentArgs(args, loaded.Config, flags.Agent)
+	if err != nil {
+		return err
+	}
+	if agentID != "" {
+		flags.Agent = agentID
 	}
 	root, err := loaded.Config.WorkspaceRoot()
 	if err != nil {
@@ -212,6 +219,7 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 	if err != nil {
 		return err
 	}
+	mgr.ConfigFiles = loaded.Files
 	defer mgr.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -223,6 +231,17 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 	}
 
 	if plain {
+		if agent.IsExternal(flags.Agent) {
+			fmt.Fprintf(os.Stdout, "open a terminal and run:\n  hermes --tui --in %s --source temper\n", root)
+			if strings.TrimSpace(goal) != "" {
+				fmt.Fprintf(os.Stdout, "  (seed) hermes chat --tui --in %s --source temper -q %q\n", root, goal)
+			}
+			go printLive(runCtx, mgr)
+			_, err := mgr.Execute(runCtx, run.Options{
+				Goal: goal, Root: root, Agent: flags.Agent, Plain: true, SkipSpawn: true,
+			})
+			return err
+		}
 		printDiscovery(os.Stdout, catalog)
 		if strings.TrimSpace(goal) == "" {
 			return fmt.Errorf("goal required with --plain")
@@ -269,12 +288,15 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 
 	return tui.Run(tui.Options{
 		Goal:       goal,
+		Agent:      flags.Agent,
 		Provider:   flags.Provider,
 		Model:      flags.Model,
 		Hub:        mgr.Hub,
 		Cancel:     cancel,
 		OnStart:    start,
 		OnFollow:   follow,
+		OnMode:     mgr.ToggleReflexMode,
+		OnApprove:  mgr.ApproveRecovery,
 		Catalog:    catalog,
 		ListModels: listModels,
 	})

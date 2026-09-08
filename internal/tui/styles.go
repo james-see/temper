@@ -29,9 +29,9 @@ var (
 	youChip = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#134E4A", Dark: "#042F2E"}).
 		Background(lipgloss.AdaptiveColor{Light: "#99F6E4", Dark: "#2DD4BF"}).Padding(0, 1)
 	modelChip = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#1C1917", Dark: "#1C1917"}).
-		Background(lipgloss.AdaptiveColor{Light: "#FBBF24", Dark: "#F59E0B"}).Padding(0, 1)
-	youBar = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#0F766E", Dark: "#2DD4BF"})
-	modelBar = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#FBBF24"})
+			Background(lipgloss.AdaptiveColor{Light: "#FBBF24", Dark: "#F59E0B"}).Padding(0, 1)
+	youBar    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#0F766E", Dark: "#2DD4BF"})
+	modelBar  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#FBBF24"})
 	waitStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A16207", Dark: "#FDE68A"}).Faint(false)
 )
 
@@ -56,6 +56,8 @@ func eventStyle(typ string) lipgloss.Style {
 		return yellow
 	case "run.completed", "recovery.completed":
 		return green
+	case "recovery.failed", "recovery.started":
+		return yellow
 	case "tool.requested", "tool.completed", "model.called", "user.message", "goal.shifted":
 		return bold
 	default:

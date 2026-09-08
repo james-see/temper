@@ -62,7 +62,9 @@ func shellTool(root string, timeout time.Duration, deny []string) Tool {
 			Parameters:  schema(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 		},
 		Run: func(ctx context.Context, args json.RawMessage) (string, []string, error) {
-			var in struct{ Command string `json:"command"` }
+			var in struct {
+				Command string `json:"command"`
+			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return "", nil, err
 			}
@@ -96,7 +98,9 @@ func readTool(root string) Tool {
 			Parameters:  schema(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
 		},
 		Run: func(_ context.Context, args json.RawMessage) (string, []string, error) {
-			var in struct{ Path string `json:"path"` }
+			var in struct {
+				Path string `json:"path"`
+			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return "", nil, err
 			}
@@ -155,7 +159,9 @@ func patchTool(root string) Tool {
 			Parameters:  schema(`{"type":"object","properties":{"diff":{"type":"string"}},"required":["diff"]}`),
 		},
 		Run: func(ctx context.Context, args json.RawMessage) (string, []string, error) {
-			var in struct{ Diff string `json:"diff"` }
+			var in struct {
+				Diff string `json:"diff"`
+			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return "", nil, err
 			}

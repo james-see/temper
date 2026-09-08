@@ -22,6 +22,11 @@ func New(repoRoot, dataDir string) (*Manager, error) {
 	return &Manager{RepoRoot: abs, DataDir: dataDir}, nil
 }
 
+// Attach uses the repo root as the workspace (no isolated worktree).
+func (m *Manager) Attach() {
+	m.Worktree = m.RepoRoot
+}
+
 func (m *Manager) Prepare(runID string) error {
 	if err := os.MkdirAll(filepath.Join(m.DataDir, "worktrees"), 0o755); err != nil {
 		return err

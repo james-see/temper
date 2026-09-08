@@ -20,8 +20,10 @@ func TestExecuteDetectsLoop(t *testing.T) {
 	initGit(t, dir)
 	cfg := config.Defaults()
 	cfg.Workspace.Root = dir
+	cfg.Reflex.Mode = config.ReflexAuto
 	cfg.Reflex.Detectors.ActionCycle.Repetitions = 2
 	cfg.Reflex.Judge.Model = ""
+	cfg.Reflex.Recovery = []config.RecoveryStep{{After: "first_stall", Action: "replan"}}
 	mgr, err := Open(cfg, dir)
 	if err != nil {
 		t.Fatal(err)

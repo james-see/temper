@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/james-see/temper/internal/agent"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/run"
@@ -36,6 +37,7 @@ const (
 	overlayHelp
 	overlayStatus
 	overlayQuit
+	overlayRecover
 )
 
 type pane int
@@ -63,9 +65,12 @@ type pickItem struct {
 
 type StartFn func(goal, provider, model string)
 type FollowFn func(text string)
+type ModeFn func() string
+type ApproveFn func()
 
 type Options struct {
 	Goal       string
+	Agent      string
 	Provider   string
 	Model      string
 	Hub        *run.Hub
@@ -73,38 +78,44 @@ type Options struct {
 	Inspect    bool
 	OnStart    StartFn
 	OnFollow   FollowFn
+	OnMode     ModeFn
+	OnApprove  ApproveFn
 	Catalog    provider.Status
 	ListModels func(providerID string) ([]string, error)
 }
 
 type Model struct {
-	phase    phase
-	overlay  overlay
-	input    textinput.Model
-	spin     spinner.Model
-	vp       viewport.Model
-	goal     string
-	provider string
-	model    string
-	hub      *run.Hub
-	cancel   context.CancelFunc
-	inspect  bool
-	width    int
-	height   int
-	start    time.Time
-	ready    bool
-	err      error
-	onStart  StartFn
-	onFollow FollowFn
-	catalog  provider.Status
-	listFn   func(string) ([]string, error)
-	items    []pickItem
-	cursor   int
-	hint     string
-	prefix   bool
-	models   []string
-	pane     pane
-	follow   bool
+	phase     phase
+	overlay   overlay
+	input     textinput.Model
+	spin      spinner.Model
+	vp        viewport.Model
+	goal      string
+	agent     string
+	provider  string
+	model     string
+	hub       *run.Hub
+	cancel    context.CancelFunc
+	inspect   bool
+	width     int
+	height    int
+	start     time.Time
+	ready     bool
+	err       error
+	onStart   StartFn
+	onFollow  FollowFn
+	onMode    ModeFn
+	onApprove ApproveFn
+	external  bool
+	catalog   provider.Status
+	listFn    func(string) ([]string, error)
+	items     []pickItem
+	cursor    int
+	hint      string
+	prefix    bool
+	models    []string
+	pane      pane
+	follow    bool
 }
 
 func New(opts Options) Model {
@@ -119,23 +130,27 @@ func New(opts Options) Model {
 	s.Style = spinStyle
 
 	m := Model{
-		phase:    phaseSplash,
-		input:    ti,
-		spin:     s,
-		goal:     opts.Goal,
-		provider: opts.Provider,
-		model:    opts.Model,
-		hub:      opts.Hub,
-		cancel:   opts.Cancel,
-		inspect:  opts.Inspect,
-		width:    80,
-		height:   24,
-		start:    time.Now(),
-		onStart:  opts.OnStart,
-		onFollow: opts.OnFollow,
-		catalog:  opts.Catalog,
-		listFn:   opts.ListModels,
-		follow:   true,
+		phase:     phaseSplash,
+		input:     ti,
+		spin:      s,
+		goal:      opts.Goal,
+		agent:     opts.Agent,
+		provider:  opts.Provider,
+		model:     opts.Model,
+		external:  agent.IsExternal(opts.Agent),
+		onMode:    opts.OnMode,
+		onApprove: opts.OnApprove,
+		hub:       opts.Hub,
+		cancel:    opts.Cancel,
+		inspect:   opts.Inspect,
+		width:     80,
+		height:    24,
+		start:     time.Now(),
+		onStart:   opts.OnStart,
+		onFollow:  opts.OnFollow,
+		catalog:   opts.Catalog,
+		listFn:    opts.ListModels,
+		follow:    true,
 	}
 	if opts.Inspect {
 		m.phase = phaseDone
@@ -173,6 +188,9 @@ func (m Model) fetchModels() tea.Cmd {
 }
 
 func (m Model) advanceSetup() (Model, tea.Cmd) {
+	if m.external {
+		return m.beginRun()
+	}
 	if m.provider == "" {
 		if c, ok := m.catalog.BestCandidate(); ok && c.Usable {
 			m.provider = c.ID
@@ -246,7 +264,7 @@ func (m *Model) layout() {
 }
 
 func (m Model) canReply() bool {
-	return m.phase == phaseDone && !m.inspect
+	return m.phase == phaseDone && !m.inspect && !m.external
 }
 
 func (m *Model) armReply() {
@@ -255,6 +273,22 @@ func (m *Model) armReply() {
 	m.input.SetValue("")
 	m.input.Focus()
 	m.syncPane()
+}
+
+func (m Model) pendingRecovery() bool {
+	if m.hub == nil {
+		return false
+	}
+	return m.hub.Get().PendingRecovery != ""
+}
+
+func (m Model) approvePending() (tea.Model, tea.Cmd) {
+	if m.onApprove != nil {
+		m.onApprove()
+	}
+	m.overlay = overlayNone
+	m.hint = ""
+	return m, nil
 }
 
 func (m Model) beginFollow(text string) (Model, tea.Cmd) {
@@ -412,9 +446,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.hub != nil && m.ready && (m.phase == phaseRunning || m.phase == phaseDone || m.inspect) {
 			snap := m.hub.Get()
 			m.refreshPane(snap)
+			if snap.PendingRecovery != "" && m.overlay == overlayNone && m.phase == phaseRunning {
+				m.overlay = overlayRecover
+			}
+			if snap.PendingRecovery == "" && m.overlay == overlayRecover {
+				m.overlay = overlayNone
+			}
 			if snap.Done && m.phase == phaseRunning {
 				m.phase = phaseDone
-				m.armReply()
+				if !m.external {
+					m.armReply()
+				}
 				m.layout()
 				return m, tea.Batch(tickEvery(), textinput.Blink)
 			}
@@ -464,6 +506,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.overlay == overlayRecover && !m.prefix {
+		switch key {
+		case "enter", "y", "Y":
+			return m.approvePending()
+		case "esc":
+			m.overlay = overlayNone
+			return m, nil
+		}
+	}
 	if m.overlay != overlayNone && m.overlay != overlayQuit && !m.prefix {
 		switch key {
 		case "esc":
@@ -488,6 +539,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if pickerPhase(m.phase) {
 		return m.handlePicker(key)
+	}
+
+	if m.phase == phaseRunning && (key == "enter" || key == "y") && m.pendingRecovery() {
+		return m.approvePending()
 	}
 
 	if (m.phase == phaseRunning || m.phase == phaseDone) && key == "tab" {
@@ -578,6 +633,14 @@ func (m Model) runPrefix(cmd string) (tea.Model, tea.Cmd) {
 		m.pane = paneIO
 		m.syncPane()
 		return m, nil
+	case "mode":
+		if m.onMode != nil {
+			mode := m.onMode()
+			m.hint = "reflex " + mode
+		}
+		return m, nil
+	case "approve":
+		return m.approvePending()
 	case "new":
 		if m.phase == phaseDone && !m.inspect {
 			return m.toGoalInput()
@@ -666,6 +729,8 @@ func (m Model) View() string {
 		return stack(body, m.statusOverlay())
 	case overlayQuit:
 		return stack(body, quitOverlay(m.width))
+	case overlayRecover:
+		return stack(body, m.recoverOverlay())
 	}
 	return body
 }
@@ -754,8 +819,17 @@ func (m Model) viewRun() string {
 	if snap.Started.IsZero() {
 		snap.Started = m.start
 	}
+	agentName := nz(snap.Agent, nz(m.agent, "native"))
+	prov := "—"
+	model := "—"
+	if !m.external {
+		prov = nz(nz(snap.Provider, m.provider), "—")
+		model = nz(nz(snap.Model, m.model), "—")
+	} else if snap.SessionID != "" {
+		prov = short(snap.SessionID, 18)
+	}
 	header := fmt.Sprintf("TEMPER  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
-		short(snap.RunID, 14), snap.State, nz(snap.Agent, "native"), nz(nz(snap.Provider, m.provider), "—"), nz(nz(snap.Model, m.model), "—"), paneLabel(m.pane), scrollLabel(m))
+		short(snap.RunID, 14), snap.State, agentName, prov, model, paneLabel(m.pane), scrollLabel(m))
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")
@@ -789,8 +863,11 @@ func (m Model) footer(snap Snapshot) string {
 	if snap.Done {
 		spin = "•"
 	}
+	mode := nz(snap.ReflexMode, "human")
 	hint := m.prefixHint()
-	if snap.Done && !m.inspect && !m.prefix {
+	if snap.PendingRecovery != "" && !m.prefix {
+		hint = "enter approve  ·  ctrl+b a  ·  " + hint
+	} else if snap.Done && !m.inspect && !m.prefix && !m.external {
 		hint = "enter reply  ·  ↑↓ scroll  ·  end latest  ·  ctrl+b n  ·  tab  ·  ctrl+c"
 	} else if !m.prefix {
 		hint = "↑↓ scroll  ·  G latest  ·  tab  ·  " + hint
@@ -798,13 +875,13 @@ func (m Model) footer(snap Snapshot) string {
 	if m.ready && !m.vp.AtBottom() {
 		hint = "more ↓  ·  " + hint
 	}
-	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s  in %s / out %s  ·  %s",
-		spin, bar, pct, elapsed, ref, compactTok(snap.TokensPrompt), compactTok(snap.TokensCompletion), hint)
+	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s %s  in %s / out %s  ·  %s",
+		spin, bar, pct, elapsed, mode, ref, compactTok(snap.TokensPrompt), compactTok(snap.TokensCompletion), hint)
 }
 
 func (m Model) prefixHint() string {
 	if m.prefix {
-		return prefixStyle.Render("prefix") + dimStyle.Render("  s ? e n t l q j k g G")
+		return prefixStyle.Render("prefix") + dimStyle.Render("  s ? e a y n t l q j k g G")
 	}
 	return "ctrl+b prefix  ·  ctrl+c cancel"
 }
@@ -830,11 +907,16 @@ budget     %.4f / %.2f
 tokens     in %d  out %d  judge %d
 reflex     %s  %s
 recovery   %s
+pending    %s
+mode       %s
+session    %s
+attach     %s
 judge      %s`,
-		snap.RunID, snap.State, snap.Goal, nz(snap.ActiveGoal, snap.Goal), snap.Agent, nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
+		snap.RunID, snap.State, snap.Goal, nz(snap.ActiveGoal, snap.Goal), nz(snap.Agent, m.agent), nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
 		snap.BudgetUsed, snap.BudgetMax, snap.TokensPrompt, snap.TokensCompletion, snap.TokensJudge,
 		snap.Reflex.State, strings.Join(snap.Reflex.Reasons, ", "),
-		nz(snap.RecoveryRung, "—"), judge)
+		nz(snap.RecoveryRung, "—"), nz(snap.PendingRecovery, "—"), nz(snap.ReflexMode, "human"),
+		nz(snap.SessionID, "—"), nz(snap.Attach, "—"), judge)
 	return overlayBox("status", body, m.width)
 }
 
@@ -843,6 +925,7 @@ func helpOverlay(width int) string {
 then:   s status  ? help  e last eval
         t model io  l event log
         j/k scroll  g/G top/bottom
+        a toggle reflex human/auto  y approve recovery
         n new goal  q quit  esc cancel prefix
 ↑↓      scroll pane  ·  pgup/pgdn page
 end     jump to latest (re-enables follow)
@@ -855,6 +938,20 @@ enter   reply in this thread when done`, width)
 
 func quitOverlay(width int) string {
 	return overlayBox("quit", "cancel run and quit?  y / n", width)
+}
+
+func (m Model) recoverOverlay() string {
+	snap := Snapshot{}
+	if m.hub != nil {
+		snap = snapFrom(m.hub.Get())
+	}
+	reasons := strings.Join(snap.PendingReasons, ", ")
+	if reasons == "" {
+		reasons = strings.Join(snap.Reflex.Reasons, ", ")
+	}
+	body := fmt.Sprintf("%s  ·  %s\n%s\n\nenter / ctrl+b y approve  ·  ctrl+b a auto  ·  esc hide",
+		nz(string(snap.Reflex.State), "reflex"), nz(snap.PendingRecovery, "recover"), nz(reasons, "pending recovery"))
+	return overlayBox("recover", body, m.width)
 }
 
 type Snapshot = run.Snapshot
@@ -1035,6 +1132,12 @@ func eventHeadline(ev event.Event) string {
 		return fmt.Sprintf("tools %v", d["tool_calls"])
 	case event.ProgressEvaluated:
 		return fmt.Sprintf("%v  %v", d["state"], d["reasons"])
+	case event.RecoveryStarted, event.RecoveryCompleted, event.RecoveryFailed:
+		return asString(d["action"])
+	case event.AgentStarted:
+		if s := asString(d["session"]); s != "" {
+			return s
+		}
 	}
 	return ""
 }
@@ -1114,7 +1217,6 @@ func asString(v any) string {
 		return fmt.Sprint(t)
 	}
 }
-
 
 func progressBar(width, pct int) string {
 	if width < 4 {

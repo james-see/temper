@@ -24,15 +24,16 @@ import (
 )
 
 const (
-	StateCreated    = "created"
-	StateClassified = "classified"
-	StatePlanned    = "planned"
-	StateExecuting  = "executing"
-	StateEvaluating = "evaluating"
-	StateRecovering = "recovering"
-	StateCompleted  = "completed"
-	StateFailed     = "failed"
-	StateCancelled  = "cancelled"
+	StateCreated      = "created"
+	StateClassified   = "classified"
+	StatePlanned      = "planned"
+	StateExecuting    = "executing"
+	StateEvaluating   = "evaluating"
+	StateRecovering   = "recovering"
+	StateCompleted    = "completed"
+	StateFailed       = "failed"
+	StateCancelled    = "cancelled"
+	StateWaitingHuman = "waiting_human"
 )
 
 type Snapshot struct {
@@ -63,6 +64,11 @@ type Snapshot struct {
 	LastLoopSeq      uint64
 	Done             bool
 	Err              string
+	ReflexMode       string
+	PendingRecovery  string
+	PendingReasons   []string
+	SessionID        string
+	Attach           string
 }
 
 type Hub struct {
@@ -85,44 +91,56 @@ func (h *Hub) set(fn func(*Snapshot)) {
 }
 
 type Options struct {
-	Goal     string
-	Root     string
-	Agent    string
-	Provider string
-	Model    string
-	Plain    bool
-	Prov     provider.Provider
-	MaxSteps int
+	Goal      string
+	Root      string
+	Agent     string
+	Provider  string
+	Model     string
+	Plain     bool
+	Prov      provider.Provider
+	MaxSteps  int
+	SkipSpawn bool
+	Hermes    *agent.Hermes
+}
+
+type pendingRec struct {
+	Action string
+	Assess reflex.Assessment
 }
 
 type session struct {
-	native     *agent.Native
-	ws         *workspace.Manager
-	opts       Options
-	tried      map[string]bool
-	eng        *reflex.Engine
-	ladder     *reflex.Ladder
-	eval       *evaluator.Engine
-	prevPass   *bool
-	stagnation int
-	step       int
-	workerTok  int
-	judgeTok   int
+	native      *agent.Native
+	hermes      *agent.Hermes
+	ws          *workspace.Manager
+	opts        Options
+	tried       map[string]bool
+	eng         *reflex.Engine
+	ladder      *reflex.Ladder
+	eval        *evaluator.Engine
+	prevPass    *bool
+	stagnation  int
+	step        int
+	workerTok   int
+	judgeTok    int
 	promptTok   int
 	complTok    int
 	phasePrompt int
 	phaseCompl  int
+	pending     *pendingRec
+	approve     chan struct{}
+	mode        string
 }
 
 type Manager struct {
-	Cfg   config.Config
-	Store *store.Store
-	Arts  *artifact.Store
-	Hub   *Hub
-	Log   *slog.Logger
-	seq   uint64
-	rec   store.Run
-	sess  *session
+	Cfg         config.Config
+	Store       *store.Store
+	Arts        *artifact.Store
+	Hub         *Hub
+	Log         *slog.Logger
+	ConfigFiles []string
+	seq         uint64
+	rec         store.Run
+	sess        *session
 }
 
 func Open(cfg config.Config, root string) (*Manager, error) {
@@ -165,10 +183,15 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	if err != nil {
 		return store.Run{}, err
 	}
-	if err := ws.Prepare(id); err != nil {
+	dec := arbiter.Select(m.Cfg, opts.Agent, opts.Provider, opts.Model)
+	if agent.IsExternal(dec.Selected.Agent) {
+		if !agent.Implemented(dec.Selected.Agent) {
+			return store.Run{}, agent.UnimplementedError(dec.Selected.Agent)
+		}
+		ws.Attach()
+	} else if err := ws.Prepare(id); err != nil {
 		return store.Run{}, err
 	}
-	dec := arbiter.Select(m.Cfg, opts.Agent, opts.Provider, opts.Model)
 	tried := map[string]bool{}
 	if dec.Selected.Provider != "" {
 		tried[dec.Selected.Provider] = true
@@ -191,8 +214,9 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 			RunID: id, Goal: opts.Goal, ActiveGoal: opts.Goal, State: StateCreated,
 			Agent: m.rec.Agent, Provider: m.rec.Provider, Model: m.rec.Model,
 			Workspace: m.rec.Workspace, Started: time.Now(),
-			BudgetMax: m.Cfg.Temper.Budget.MaxCostPerTask,
-			JudgeOn:   m.Cfg.Reflex.Judge.Model != "",
+			BudgetMax:  m.Cfg.Temper.Budget.MaxCostPerTask,
+			JudgeOn:    m.Cfg.Reflex.Judge.Model != "",
+			ReflexMode: m.Cfg.Reflex.EffectiveMode(),
 		}
 	})
 
@@ -208,6 +232,10 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	emit(event.TaskClassified, "runtime", map[string]any{"goal": opts.Goal})
 	emit(event.RoutingDecided, "arbiter", dec)
 	emit(event.AgentSelected, "arbiter", dec.Selected)
+
+	if agent.IsExternal(dec.Selected.Agent) {
+		return m.startExternal(ctx, opts, ws, dec, tried, id)
+	}
 
 	prov := opts.Prov
 	if prov == nil {
@@ -264,6 +292,8 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	m.sess = &session{
 		native: native, ws: ws, opts: opts, tried: tried,
 		eng: eng, ladder: ladder, eval: eval,
+		approve: make(chan struct{}, 1),
+		mode:    m.Cfg.Reflex.EffectiveMode(),
 	}
 	return m.drive(ctx)
 }
@@ -533,12 +563,18 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 			if err := m.transition(ctx, StateRecovering); err != nil {
 				return m.rec, err
 			}
-			emit(event.RecoveryStarted, "reflex", map[string]any{"action": action})
-			m.debug("recovery", "action", action, "state", assess.State, "reasons", assess.Reasons)
-			m.Hub.set(func(s *Snapshot) { s.RecoveryRung = action })
-			native.Inject("user", recoveryPrompt(action, opts.Goal, assess))
-			emit(event.StrategyChanged, "reflex", map[string]any{"action": action})
-			emit(event.RecoveryCompleted, "reflex", map[string]any{"action": action})
+			s.native = native
+			if err := m.offerRecovery(ctx, action, assess, emit); err != nil {
+				return m.rec, err
+			}
+			if m.sess.pending != nil {
+				if err := m.waitApprove(ctx, nil); err != nil {
+					return m.cancel(ctx)
+				}
+				if err := m.applyPending(ctx, emit); err != nil {
+					return m.rec, err
+				}
+			}
 		}
 
 		if costOf(workerTok, judgeTok) >= m.Cfg.Temper.Budget.MaxCostPerTask && m.Cfg.Temper.Budget.MaxCostPerTask > 0 {

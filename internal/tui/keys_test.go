@@ -133,7 +133,7 @@ func TestDonePrefixNNewGoal(t *testing.T) {
 func TestRenderModelIO(t *testing.T) {
 	data, _ := json.Marshal(map[string]any{"content": "folder has a README", "tool_calls": 0})
 	s := renderModelIO(run.Snapshot{
-		Goal: "what is here",
+		Goal:   "what is here",
 		Events: []event.Event{{Type: event.ModelCompleted, Data: data}},
 	}, 80, "")
 	plain := stripANSI(s)
@@ -265,6 +265,55 @@ func TestMarkdownHeadingSurvives(t *testing.T) {
 	plain := stripANSI(s)
 	if !strings.Contains(plain, "Hello") || !strings.Contains(plain, "bold") {
 		t.Fatal(plain)
+	}
+}
+
+func TestExternalSkipsPickers(t *testing.T) {
+	started := false
+	m := New(Options{
+		Agent: "hermes",
+		OnStart: func(goal, provider, model string) {
+			started = true
+			if goal != "" || provider != "" || model != "" {
+				t.Fatalf("sidecar start %q %q %q", goal, provider, model)
+			}
+		},
+	})
+	next, _ := m.Update(splashDone{})
+	got := next.(Model)
+	if got.phase != phaseRunning {
+		t.Fatalf("phase %d", got.phase)
+	}
+	if !started {
+		t.Fatal("should start without pickers")
+	}
+}
+
+func TestToggleModeAndApprove(t *testing.T) {
+	var mode string
+	approved := false
+	m := New(Options{
+		Agent: "hermes",
+		OnMode: func() string {
+			mode = "auto"
+			return mode
+		},
+		OnApprove: func() { approved = true },
+	})
+	m.phase = phaseRunning
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	got := next.(Model)
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got = next.(Model)
+	if mode != "auto" {
+		t.Fatal("ctrl+b a toggles mode")
+	}
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	got = next.(Model)
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_ = next.(Model)
+	if !approved {
+		t.Fatal("ctrl+b y approve")
 	}
 }
 

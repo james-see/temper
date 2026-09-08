@@ -52,7 +52,8 @@ func (p Provider) AuthKey() string {
 }
 
 type Agent struct {
-	Type string `yaml:"type"`
+	Type    string `yaml:"type"`
+	Command string `yaml:"command,omitempty"`
 }
 
 type Arbiter struct {
@@ -70,10 +71,25 @@ type PolicyPrefer struct {
 	Model    string `yaml:"model"`
 }
 
+const (
+	ReflexHuman = "human"
+	ReflexAuto  = "auto"
+)
+
 type Reflex struct {
+	Mode      string          `yaml:"mode,omitempty"`
 	Detectors ReflexDetectors `yaml:"detectors"`
 	Recovery  []RecoveryStep  `yaml:"recovery"`
 	Judge     Judge           `yaml:"judge"`
+}
+
+func (r Reflex) EffectiveMode() string {
+	switch strings.ToLower(strings.TrimSpace(r.Mode)) {
+	case ReflexAuto:
+		return ReflexAuto
+	default:
+		return ReflexHuman
+	}
 }
 
 type ReflexDetectors struct {
@@ -160,8 +176,10 @@ func Defaults() Config {
 		},
 		Agents: map[string]Agent{
 			"native": {Type: "temper"},
+			"hermes": {Type: "hermes"},
 		},
 		Reflex: Reflex{
+			Mode: ReflexHuman,
 			Detectors: ReflexDetectors{
 				RepeatedError: DetectorThresh{Threshold: 3},
 				ActionCycle:   DetectorRep{Repetitions: 2},

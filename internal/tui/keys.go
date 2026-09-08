@@ -22,6 +22,10 @@ func prefixCommand(s string) (string, bool) {
 		return "top", true
 	case "G":
 		return "bottom", true
+	case "a":
+		return "mode", true
+	case "y":
+		return "approve", true
 	case "n":
 		return "new", true
 	case "l":
