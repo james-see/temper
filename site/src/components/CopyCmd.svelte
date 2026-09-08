@@ -50,7 +50,7 @@
   }
 
   button:hover {
-    border-color: var(--phosphor-dim);
+    border-color: var(--ink);
   }
 
   .lines {
@@ -67,7 +67,7 @@
   }
 
   .ps {
-    color: var(--phosphor);
+    color: var(--ink);
     flex: none;
   }
 

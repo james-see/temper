@@ -210,9 +210,9 @@
     border: 1px solid var(--line);
     border-radius: 18px;
     box-shadow:
-      0 0 0 1px #050605,
+      0 0 0 1px #000,
       0 24px 80px rgba(0, 0, 0, 0.55),
-      inset 0 1px 0 rgba(201, 205, 184, 0.06);
+      inset 0 1px 0 rgba(229, 229, 229, 0.06);
     overflow: hidden;
   }
 
@@ -231,8 +231,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--phosphor);
-    box-shadow: 0 0 10px var(--phosphor);
+    background: var(--ink);
   }
 
   .chrome-title {
@@ -249,7 +248,7 @@
     margin: 0 10px 10px;
     padding: 16px 16px 14px;
     background: var(--panel);
-    border: 1px solid #181c16;
+    border: 1px solid var(--line);
     border-radius: var(--r);
     overflow: hidden;
   }
@@ -283,12 +282,11 @@
 
   .ascii {
     margin: 0;
-    color: var(--phosphor);
+    color: var(--paper);
     font-family: var(--mono);
     font-size: clamp(4.4px, 1.55vw, 12px);
     line-height: 1.12;
     letter-spacing: 0;
-    text-shadow: 0 0 18px rgba(142, 239, 106, 0.28);
     overflow: auto;
     max-width: 100%;
   }
@@ -311,11 +309,11 @@
   }
 
   .ps {
-    color: var(--phosphor);
+    color: var(--ink);
   }
 
   .caret {
-    color: var(--phosphor);
+    color: var(--paper);
     animation: blink 0.9s steps(1) infinite;
   }
 
@@ -328,9 +326,8 @@
     line-height: 0.92;
     letter-spacing: -0.03em;
     text-transform: lowercase;
-    color: var(--phosphor);
+    color: var(--paper);
     text-align: left;
-    text-shadow: 0 0 40px rgba(142, 239, 106, 0.35);
     word-break: break-word;
     animation: flood 0.18s steps(2) infinite;
   }
@@ -362,7 +359,7 @@
     font-weight: 800;
     font-size: 18px;
     letter-spacing: 0.08em;
-    color: var(--phosphor);
+    color: var(--paper);
   }
 
   .sep,
@@ -410,7 +407,7 @@
   .pbar {
     font-variant-ligatures: none;
     letter-spacing: 0;
-    color: var(--phosphor);
+    color: var(--paper);
   }
 
   .pct {
@@ -418,13 +415,13 @@
   }
 
   .spin {
-    color: var(--phosphor);
+    color: var(--ink);
     width: 1.2em;
   }
 
   .progressing,
   .complete {
-    color: var(--phosphor);
+    color: var(--paper);
   }
 
   .uncertain,
@@ -442,7 +439,7 @@
   }
 
   .phosphor {
-    color: var(--phosphor);
+    color: var(--paper);
   }
 
   .amber {

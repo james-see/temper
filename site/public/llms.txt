@@ -1,0 +1,28 @@
+# Temper
+
+> The open-source control plane for coding agents.
+
+Temper sits above coding agents. It supervises Cursor, Claude Code, Codex, and OpenCode: it measures whether they are making progress, detects stalls and loops, changes strategy, and verifies outcomes. Reflex is the progress detector.
+
+- Site: https://temper.baby
+- GitHub: https://github.com/james-see/temper
+- License: Apache-2.0
+- Author: James Campbell (james@valaclaims.com, https://github.com/james-see)
+
+## Install
+
+```
+brew tap james-see/tap && brew install temper
+```
+
+```
+go install github.com/james-see/temper/cmd/temper@latest
+```
+
+## Commands
+
+- `temper` — open the TUI
+- `temper run "fix the auth tests"` — supervised run
+- `temper run --plain "..."` — no TUI, events on stdout
+- `temper inspect <run-id>` — replay the event stream
+- `temper config show` — agents, providers, reflex

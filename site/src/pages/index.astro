@@ -13,11 +13,14 @@ const commands = [
 ---
 
 <Base
-  title="Temper — adaptive control plane for coding agents"
-  description="The open-source adaptive control plane for coding agents."
+  title="Temper — the open-source control plane for coding agents"
+  description="Temper is the open-source control plane for coding agents. It supervises Cursor, Claude Code, Codex, and OpenCode, and uses Reflex to detect progress, stalls, and loops. Install: brew tap james-see/tap && brew install temper. https://github.com/james-see/temper"
 >
   <header class="top">
-    <p class="mark">TEMPER</p>
+    <a class="brand" href="https://temper.baby">
+      <img src="/logo.png" alt="Temper" width="40" height="40" />
+      <span>TEMPER</span>
+    </a>
     <nav>
       <a href="https://github.com/james-see/temper">github</a>
       <a href="#manual">install</a>
@@ -27,7 +30,11 @@ const commands = [
   <main>
     <Terminal client:load />
 
-    <p class="line">The open-source adaptive control plane for coding agents.</p>
+    <h1>The open-source control plane for coding agents</h1>
+    <p class="deck">
+      Supervises Cursor, Claude Code, Codex, and OpenCode. Reflex detects progress, stalls, and
+      loops.
+    </p>
 
     <section id="manual" class="manual">
       <h2>install</h2>
@@ -62,7 +69,7 @@ const commands = [
 <style>
   .top {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
     max-width: 980px;
@@ -70,14 +77,28 @@ const commands = [
     padding: 28px 20px 18px;
   }
 
-  .mark {
-    margin: 0;
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--paper);
+    text-decoration: none;
+  }
+
+  .brand img {
+    display: block;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--line);
+  }
+
+  .brand span {
     font-family: var(--display);
     font-weight: 800;
-    font-size: clamp(28px, 6vw, 44px);
+    font-size: clamp(22px, 4.4vw, 32px);
     letter-spacing: 0.12em;
-    line-height: 0.9;
-    color: var(--phosphor);
+    line-height: 1;
+    color: var(--paper);
   }
 
   nav {
@@ -92,7 +113,7 @@ const commands = [
   }
 
   nav a:hover {
-    color: var(--phosphor);
+    color: var(--paper);
   }
 
   main {
@@ -101,11 +122,20 @@ const commands = [
     padding: 0 20px 48px;
   }
 
-  .line {
+  h1 {
     margin: 28px 0 0;
     color: var(--paper);
-    font-size: clamp(16px, 2.4vw, 20px);
+    font-size: clamp(18px, 2.6vw, 22px);
+    font-weight: 500;
+    letter-spacing: -0.01em;
     max-width: 28ch;
+  }
+
+  .deck {
+    margin: 10px 0 0;
+    color: var(--dim);
+    font-size: 14px;
+    max-width: 52ch;
   }
 
   .manual {

@@ -1,12 +1,13 @@
 :root {
-  --void: #070806;
-  --bezel: #10120f;
-  --panel: #0c0e0b;
-  --line: #22261f;
-  --paper: #c9cdb8;
-  --dim: #6a6e62;
-  --phosphor: #8eef6a;
-  --phosphor-dim: #3d7a32;
+  --void: #0a0a0a;
+  --bezel: #111;
+  --panel: #0a0a0a;
+  --line: #404040;
+  --paper: #e5e5e5;
+  --dim: #737373;
+  --ink: #a3a3a3;
+  --bright: #e5e5e5;
+  --muted: #404040;
   --amber: #e8b44a;
   --alert: #e85a42;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -32,30 +33,28 @@ body {
 }
 
 body {
-  background-image:
-    radial-gradient(1200px 700px at 50% -10%, rgba(142, 239, 106, 0.06), transparent 55%),
-    linear-gradient(180deg, #0a0c09 0%, var(--void) 40%);
+  background-image: linear-gradient(180deg, #171717 0%, var(--void) 45%);
 }
 
 a {
-  color: var(--phosphor);
+  color: var(--paper);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
 
 a:hover {
-  color: #b6ff9a;
+  color: var(--ink);
 }
 
 a:focus-visible,
 button:focus-visible {
-  outline: 2px solid var(--phosphor);
+  outline: 2px solid var(--ink);
   outline-offset: 3px;
 }
 
 ::selection {
-  background: var(--phosphor);
-  color: var(--void);
+  background: #404040;
+  color: var(--paper);
 }
 
 .skip {
@@ -64,7 +63,7 @@ button:focus-visible {
   top: -40px;
   z-index: 20;
   padding: 6px 10px;
-  background: var(--phosphor);
+  background: var(--paper);
   color: var(--void);
   font-size: 12px;
 }

@@ -7,7 +7,59 @@ interface Props {
 }
 
 const { title, description } = Astro.props;
-const canonical = new URL(Astro.url.pathname, Astro.site);
+const siteUrl = "https://temper.baby";
+const canonical = new URL(Astro.url.pathname, Astro.site ?? siteUrl);
+const ogImage = new URL("/og.png", canonical);
+const twitterImage = new URL("/twitter.png", canonical);
+const logoUrl = new URL("/logo.png", canonical);
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      name: "Temper",
+      url: siteUrl,
+      description,
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "macOS, Linux",
+      license: "https://www.apache.org/licenses/LICENSE-2.0",
+      image: logoUrl.href,
+      screenshot: ogImage.href,
+      codeRepository: "https://github.com/james-see/temper",
+      installUrl: `${siteUrl}/#manual`,
+      author: { "@id": "https://github.com/james-see#person" },
+      publisher: { "@id": `${siteUrl}#organization` },
+    },
+    {
+      "@type": "Person",
+      "@id": "https://github.com/james-see#person",
+      name: "James Campbell",
+      email: "james@valaclaims.com",
+      url: "https://github.com/james-see",
+      sameAs: ["https://github.com/james-see"],
+    },
+    {
+      "@type": "Organization",
+      "@id": `${siteUrl}#organization`,
+      name: "Temper",
+      url: siteUrl,
+      logo: logoUrl.href,
+      founder: { "@id": "https://github.com/james-see#person" },
+      sameAs: ["https://github.com/james-see/temper"],
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${siteUrl}#website`,
+      name: "Temper",
+      url: siteUrl,
+      description,
+      inLanguage: "en",
+      publisher: { "@id": `${siteUrl}#organization` },
+      author: { "@id": "https://github.com/james-see#person" },
+    },
+  ],
+};
 ---
 
 <!doctype html>
@@ -17,20 +69,39 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    <meta name="author" content="James Campbell" />
+    <meta name="robots" content="index, follow" />
     <link rel="canonical" href={canonical} />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <meta name="theme-color" content="#070806" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <meta name="msapplication-TileColor" content="#000000" />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Temper" />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:alt" content="Temper labrys-T mark and tagline" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={twitterImage} />
+    <meta name="twitter:image:alt" content="Temper labrys-T mark and tagline" />
+    <link rel="author" href="https://github.com/james-see" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
   </head>
   <body>
     <a class="skip" href="#manual">Skip to install</a>
