@@ -1,5 +1,6 @@
 <script lang="ts">
-  const cmd = "go install github.com/james-see/temper/cmd/temper@latest";
+  const cmd = "brew tap james-see/tap && brew install temper";
+  const go = "go install github.com/james-see/temper/cmd/temper@latest";
   let copied = $state(false);
 
   async function copy() {
@@ -15,13 +16,23 @@
   }
 </script>
 
-<button type="button" onclick={copy}>
-  <span class="ps">$</span>
-  <code>{cmd}</code>
-  <span class="hint">{copied ? "copied" : "copy"}</span>
-</button>
+<div class="install">
+  <button type="button" onclick={copy}>
+    <span class="lines">
+      <span><span class="ps">$</span> brew tap james-see/tap</span>
+      <span><span class="ps">$</span> brew install temper</span>
+    </span>
+    <span class="hint">{copied ? "copied" : "copy"}</span>
+  </button>
+  <p class="alt">{go}</p>
+</div>
 
 <style>
+  .install {
+    display: grid;
+    gap: 8px;
+  }
+
   button {
     display: flex;
     align-items: center;
@@ -42,16 +53,22 @@
     border-color: var(--phosphor-dim);
   }
 
+  .lines {
+    display: grid;
+    gap: 4px;
+    flex: 1;
+    font-size: clamp(12px, 2.4vw, 14px);
+  }
+
+  .lines > span {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+
   .ps {
     color: var(--phosphor);
     flex: none;
-  }
-
-  code {
-    flex: 1;
-    font-family: inherit;
-    font-size: clamp(12px, 2.4vw, 14px);
-    overflow-wrap: anywhere;
   }
 
   .hint {
@@ -60,5 +77,12 @@
     font-size: 11px;
     letter-spacing: 0.08em;
     text-transform: lowercase;
+  }
+
+  .alt {
+    margin: 0 2px;
+    color: var(--dim);
+    font-size: 11px;
+    overflow-wrap: anywhere;
   }
 </style>

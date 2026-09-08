@@ -21,12 +21,12 @@ Goal → Plan → Action → Observation → Progress evaluator
 ## Install
 
 ```bash
-go install github.com/james-see/temper/cmd/temper@v0.1.0
+brew tap james-see/tap
+brew install temper
 ```
 
 ```bash
-brew tap james-see/tap
-brew install temper
+go install github.com/james-see/temper/cmd/temper@latest
 ```
 
 ## CLI
