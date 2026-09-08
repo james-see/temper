@@ -61,6 +61,7 @@ type pickItem struct {
 }
 
 type StartFn func(goal, provider, model string)
+type FollowFn func(text string)
 
 type Options struct {
 	Goal       string
@@ -70,6 +71,7 @@ type Options struct {
 	Cancel     context.CancelFunc
 	Inspect    bool
 	OnStart    StartFn
+	OnFollow   FollowFn
 	Catalog    provider.Status
 	ListModels func(providerID string) ([]string, error)
 }
@@ -92,6 +94,7 @@ type Model struct {
 	ready    bool
 	err      error
 	onStart  StartFn
+	onFollow FollowFn
 	catalog  provider.Status
 	listFn   func(string) ([]string, error)
 	items    []pickItem
@@ -127,6 +130,7 @@ func New(opts Options) Model {
 		height:   24,
 		start:    time.Now(),
 		onStart:  opts.OnStart,
+		onFollow: opts.OnFollow,
 		catalog:  opts.Catalog,
 		listFn:   opts.ListModels,
 	}
@@ -217,6 +221,48 @@ func (m Model) toGoalInput() (Model, tea.Cmd) {
 	return m, textinput.Blink
 }
 
+func (m *Model) layout() {
+	headerH, footerH := 3, 4
+	replyH := 0
+	if m.canReply() {
+		replyH = 3
+	}
+	h := max(3, m.height-headerH-footerH-replyH)
+	if !m.ready {
+		m.vp = viewport.New(max(20, m.width-2), h)
+		m.vp.Style = vpStyle
+		m.ready = true
+	} else {
+		m.vp.Width = max(20, m.width-2)
+		m.vp.Height = h
+	}
+	m.input.Width = max(20, m.width-8)
+}
+
+func (m Model) canReply() bool {
+	return m.phase == phaseDone && !m.inspect
+}
+
+func (m *Model) armReply() {
+	m.pane = paneIO
+	m.input.Placeholder = "follow up on this thread…"
+	m.input.SetValue("")
+	m.input.Focus()
+	m.syncPane()
+}
+
+func (m Model) beginFollow(text string) (Model, tea.Cmd) {
+	m.input.SetValue("")
+	m.input.Blur()
+	m.phase = phaseRunning
+	m.pane = paneIO
+	m.layout()
+	if m.onFollow != nil {
+		m.onFollow(text)
+	}
+	return m, nil
+}
+
 func (m Model) togglePane() (Model, tea.Cmd) {
 	if m.pane == paneLog {
 		m.pane = paneIO
@@ -248,17 +294,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		headerH, footerH := 3, 4
-		h := max(3, m.height-headerH-footerH)
-		if !m.ready {
-			m.vp = viewport.New(max(20, m.width-2), h)
-			m.vp.Style = vpStyle
-			m.ready = true
-		} else {
-			m.vp.Width = max(20, m.width-2)
-			m.vp.Height = h
-		}
-		m.input.Width = max(20, m.width-8)
+		m.layout()
 		return m, nil
 
 	case splashDone:
@@ -301,6 +337,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshPane(snap)
 			if snap.Done && m.phase == phaseRunning {
 				m.phase = phaseDone
+				m.armReply()
+				m.layout()
+				return m, tea.Batch(tickEvery(), textinput.Blink)
 			}
 		}
 		return m, tickEvery()
@@ -370,8 +409,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.togglePane()
 	}
 
-	if m.phase == phaseDone && !m.inspect && (key == "enter" || key == "n") {
-		return m.toGoalInput()
+	if m.phase == phaseDone && !m.inspect {
+		if key == "enter" {
+			v := strings.TrimSpace(m.input.Value())
+			if v == "" {
+				return m, nil
+			}
+			return m.beginFollow(v)
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
 	}
 
 	if typingPhase(m.phase) {
@@ -621,6 +669,10 @@ func (m Model) viewRun() string {
 	if m.ready {
 		b.WriteString(m.vp.View())
 	}
+	if m.canReply() {
+		b.WriteString("\n")
+		b.WriteString(boxStyle.Render(m.input.View()))
+	}
 	b.WriteString("\n")
 	b.WriteString(m.footer(snap))
 	return b.String()
@@ -646,7 +698,7 @@ func (m Model) footer(snap Snapshot) string {
 	}
 	hint := m.prefixHint()
 	if snap.Done && !m.inspect && !m.prefix {
-		hint = "enter new goal  ·  tab pane  ·  ctrl+c quit"
+		hint = "enter to reply  ·  ctrl+b n new goal  ·  tab pane  ·  ctrl+c quit"
 	} else if !m.prefix {
 		hint = "tab pane  ·  " + hint
 	}
@@ -696,7 +748,7 @@ then:   s status  ? help  e last eval
         n new goal  q quit  esc cancel prefix
 tab     switch log / model io
 ctrl+c  cancel run (no prefix)
-enter   select / submit / new goal when done`, width)
+enter   reply in this thread when done`, width)
 }
 
 func quitOverlay(width int) string {
@@ -758,6 +810,22 @@ func renderModelIO(snap Snapshot, width int) string {
 	turns := 0
 	for _, ev := range snap.Events {
 		switch ev.Type {
+		case event.UserMessage:
+			var d struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(ev.Data, &d)
+			if strings.TrimSpace(d.Text) == "" {
+				continue
+			}
+			turns++
+			b.WriteString(bold.Render("you"))
+			b.WriteString("\n")
+			for _, line := range wrapLines(strings.TrimSpace(d.Text), width) {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
 		case event.ModelCompleted:
 			var d struct {
 				Content   string `json:"content"`
@@ -814,6 +882,8 @@ func eventHeadline(ev event.Event) string {
 			return "error"
 		}
 		return fmt.Sprintf("%v  %vms", d["tool"], d["ms"])
+	case event.UserMessage:
+		return asString(d["text"])
 	case event.ModelCompleted:
 		if err, ok := d["error"].(string); ok && err != "" {
 			return "error"
@@ -830,6 +900,8 @@ func eventBodyLines(ev event.Event, maxLines, width int) []string {
 	_ = json.Unmarshal(ev.Data, &d)
 	text := ""
 	switch ev.Type {
+	case event.UserMessage:
+		text = asString(d["text"])
 	case event.ToolCompleted:
 		if err, ok := d["error"].(string); ok && err != "" {
 			text = err

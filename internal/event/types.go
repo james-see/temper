@@ -9,6 +9,7 @@ const (
 
 	TaskClassified         = "task.classified"
 	TaskAcceptanceDefined  = "task.acceptance_defined"
+	UserMessage            = "user.message"
 
 	PlanCreated = "plan.created"
 	PlanUpdated = "plan.updated"

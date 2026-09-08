@@ -48,7 +48,7 @@ func eventStyle(typ string) lipgloss.Style {
 		return yellow
 	case "run.completed", "recovery.completed":
 		return green
-	case "tool.requested", "tool.completed", "model.called":
+	case "tool.requested", "tool.completed", "model.called", "user.message":
 		return bold
 	default:
 		return lipgloss.NewStyle()

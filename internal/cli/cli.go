@@ -20,7 +20,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.1.3"
+const Version = "0.1.4"
 
 func Execute() {
 	if err := root().Execute(); err != nil {
@@ -261,6 +261,11 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 			})
 		}()
 	}
+	follow := func(text string) {
+		go func() {
+			_, _ = mgr.Followup(runCtx, text)
+		}()
+	}
 
 	return tui.Run(tui.Options{
 		Goal:       goal,
@@ -269,6 +274,7 @@ func doRun(ctx context.Context, goal string, flags config.Flags) error {
 		Hub:        mgr.Hub,
 		Cancel:     cancel,
 		OnStart:    start,
+		OnFollow:   follow,
 		Catalog:    catalog,
 		ListModels: listModels,
 	})

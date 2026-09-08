@@ -51,6 +51,7 @@ type Snapshot struct {
 	RecoveryRung     string
 	JudgeOn          bool
 	JudgeUsed        bool
+	AwaitReply       bool
 	TokensWorker     int
 	TokensPrompt     int
 	TokensCompletion int
@@ -93,6 +94,23 @@ type Options struct {
 	MaxSteps int
 }
 
+type session struct {
+	native     *agent.Native
+	ws         *workspace.Manager
+	opts       Options
+	tried      map[string]bool
+	eng        *reflex.Engine
+	ladder     *reflex.Ladder
+	eval       *evaluator.Engine
+	prevPass   *bool
+	stagnation int
+	step       int
+	workerTok  int
+	judgeTok   int
+	promptTok  int
+	complTok   int
+}
+
 type Manager struct {
 	Cfg   config.Config
 	Store *store.Store
@@ -101,6 +119,7 @@ type Manager struct {
 	Log   *slog.Logger
 	seq   uint64
 	rec   store.Run
+	sess  *session
 }
 
 func Open(cfg config.Config, root string) (*Manager, error) {
@@ -237,13 +256,65 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		Timeout: m.Cfg.Shell.Timeout,
 	}
 
-	var prevPass *bool
-	var workerTok, judgeTok, promptTok, complTok int
-	stagnation := 0
-
 	m.debug("routing", "agent", m.rec.Agent, "provider", m.rec.Provider, "model", m.rec.Model, "reasons", dec.Reasons)
 
-	for step := 1; step <= opts.MaxSteps; step++ {
+	m.sess = &session{
+		native: native, ws: ws, opts: opts, tried: tried,
+		eng: eng, ladder: ladder, eval: eval,
+	}
+	return m.drive(ctx)
+}
+
+func (m *Manager) Followup(ctx context.Context, text string) (store.Run, error) {
+	if m.sess == nil || m.sess.native == nil {
+		return m.rec, fmt.Errorf("no active session")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return m.rec, fmt.Errorf("empty follow-up")
+	}
+	m.sess.opts.MaxSteps = m.sess.step + 24
+	m.sess.stagnation = 0
+	m.sess.eng = reflex.NewEngine(
+		m.Cfg.Reflex.Detectors.ActionCycle.Repetitions,
+		m.Cfg.Reflex.Detectors.RepeatedError.Threshold,
+		m.Cfg.Reflex.Detectors.TokenBurn.Threshold,
+		m.Cfg.Reflex.Detectors.Stagnation.Actions,
+		m.Cfg.Reflex.Detectors.Regression.Enabled,
+	)
+	m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))
+	m.Hub.set(func(s *Snapshot) { s.Done = false; s.AwaitReply = false })
+	m.emit(ctx, event.UserMessage, "user", map[string]any{"text": text})
+	m.sess.native.Inject("user", text)
+	m.debug("followup", "run", m.rec.ID, "chars", len(text))
+	return m.drive(ctx)
+}
+
+func (m *Manager) drive(ctx context.Context) (store.Run, error) {
+	s := m.sess
+	opts := s.opts
+	native := s.native
+	ws := s.ws
+	tried := s.tried
+	eng := s.eng
+	ladder := s.ladder
+	eval := s.eval
+	prevPass := s.prevPass
+	workerTok, judgeTok, promptTok, complTok := s.workerTok, s.judgeTok, s.promptTok, s.complTok
+	stagnation := s.stagnation
+	emit := func(typ, actor string, data any) {
+		m.emit(ctx, typ, actor, data)
+	}
+	defer func() {
+		s.native = native
+		s.prevPass = prevPass
+		s.workerTok, s.judgeTok, s.promptTok, s.complTok = workerTok, judgeTok, promptTok, complTok
+		s.stagnation = stagnation
+		s.tried = tried
+	}()
+
+	for step := s.step + 1; step <= opts.MaxSteps; step++ {
+		s.step = step
 		if err := ctx.Err(); err != nil {
 			return m.cancel(ctx)
 		}
@@ -271,7 +342,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 				if nxt, ok := m.fallbackProvider(ctx, tried, emit); ok {
 					m.debug("provider.fallback", "provider", m.rec.Provider, "model", m.rec.Model)
 					native = agent.NewNative(nxt, m.rec.Model, ws.Root(), m.Cfg.Shell.Timeout, m.Cfg.Shell.Deny)
-					if _, err := native.Start(ctx, agent.TaskRequest{RunID: id, Prompt: opts.Goal, Workspace: ws.Root(), Model: m.rec.Model}); err != nil {
+					if _, err := native.Start(ctx, agent.TaskRequest{RunID: m.rec.ID, Prompt: opts.Goal, Workspace: ws.Root(), Model: m.rec.Model}); err != nil {
 						return m.fail(ctx, err)
 					}
 					continue
@@ -338,7 +409,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		meaningful := strings.TrimSpace(diff) != ""
 		if meaningful {
 			stagnation = 0
-			if hash, err := ws.Checkpoint(fmt.Sprintf("temper %s step %d", id, step)); err == nil && hash != "" {
+			if hash, err := ws.Checkpoint(fmt.Sprintf("temper %s step %d", m.rec.ID, step)); err == nil && hash != "" {
 				emit(event.CheckpointCreated, "workspace", map[string]any{"hash": hash})
 			}
 		} else if exploratory {
@@ -570,14 +641,18 @@ func (m *Manager) transition(ctx context.Context, state string) error {
 func (m *Manager) complete(ctx context.Context) (store.Run, error) {
 	m.emit(ctx, event.RunCompleted, "runtime", map[string]any{"state": StateCompleted})
 	_ = m.transition(ctx, StateCompleted)
-	m.Hub.set(func(s *Snapshot) { s.Done = true; s.Progress = 1 })
+	m.Hub.set(func(s *Snapshot) { s.Done = true; s.Progress = 1; s.AwaitReply = m.sess != nil && m.sess.native != nil })
 	return m.rec, nil
 }
 
 func (m *Manager) fail(ctx context.Context, err error) (store.Run, error) {
 	m.emit(ctx, event.RunFailed, "runtime", map[string]any{"error": err.Error()})
 	_ = m.transition(ctx, StateFailed)
-	m.Hub.set(func(s *Snapshot) { s.Done = true; s.Err = err.Error() })
+	m.Hub.set(func(s *Snapshot) {
+		s.Done = true
+		s.Err = err.Error()
+		s.AwaitReply = m.sess != nil && m.sess.native != nil
+	})
 	return m.rec, err
 }
 

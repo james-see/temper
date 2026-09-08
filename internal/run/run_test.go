@@ -173,6 +173,82 @@ func TestPrefillDoesNotFailRun(t *testing.T) {
 	}
 }
 
+func TestFollowupContinuesSession(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Judge.Model = ""
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+
+	n := 0
+	var lastUser string
+	mock := &provider.Mock{
+		Name: "mock",
+		Handler: func(req provider.Request) provider.Result {
+			n++
+			if len(req.Messages) > 0 {
+				last := req.Messages[len(req.Messages)-1]
+				if last.Role == "user" {
+					lastUser = last.Content
+				}
+			}
+			if n == 1 {
+				return provider.Result{
+					Content: "I cannot search the web from here.",
+					Usage:   provider.Usage{PromptTokens: 20, CompletionTokens: 12},
+				}
+			}
+			return provider.Result{
+				Content: "ok, curling github.com/james-see",
+				Usage:   provider.Usage{PromptTokens: 40, CompletionTokens: 10},
+			}
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	r, err := mgr.Execute(ctx, Options{Goal: "search the web for james-see github", Root: dir, Prov: mock, MaxSteps: 4})
+	if err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+	if r.State != StateCompleted {
+		t.Fatalf("want completed got %s", r.State)
+	}
+	if !mgr.Hub.Get().AwaitReply {
+		t.Fatal("expected await reply after complete")
+	}
+	r, err = mgr.Followup(ctx, "try curl instead")
+	if err != nil {
+		t.Fatalf("follow-up: %v", err)
+	}
+	if r.State != StateCompleted {
+		t.Fatalf("follow-up want completed got %s", r.State)
+	}
+	if lastUser != "try curl instead" {
+		t.Fatalf("session last user %q", lastUser)
+	}
+	if n < 2 {
+		t.Fatalf("expected second generate, got %d", n)
+	}
+	evs, err := mgr.Store.ListEvents(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawUser bool
+	for _, ev := range evs {
+		if ev.Type == event.UserMessage {
+			sawUser = true
+		}
+	}
+	if !sawUser {
+		t.Fatalf("missing user.message: %s", types(evs))
+	}
+}
+
 func types(evs []event.Event) string {
 	b, _ := json.Marshal(func() []string {
 		var t []string
