@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -246,6 +247,129 @@ func TestFollowupContinuesSession(t *testing.T) {
 	}
 	if !sawUser {
 		t.Fatalf("missing user.message: %s", types(evs))
+	}
+	for _, ev := range evs {
+		if ev.Type == event.GoalShifted {
+			t.Fatalf("clarification should not shift goal: %s", types(evs))
+		}
+	}
+	if got := mgr.Hub.Get().ActiveGoal; got != "search the web for james-see github" {
+		t.Fatalf("active goal %q", got)
+	}
+	if mgr.sess.opts.Goal != "search the web for james-see github" {
+		t.Fatalf("phase goal %q", mgr.sess.opts.Goal)
+	}
+}
+
+func TestFollowupResetsReflexPhase(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Judge.Model = ""
+	cfg.Reflex.Detectors.TokenBurn.Threshold = 200
+	cfg.Reflex.Detectors.Stagnation.Actions = 20
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+
+	n := 0
+	mock := &provider.Mock{
+		Name: "mock",
+		Handler: func(provider.Request) provider.Result {
+			n++
+			if n == 1 {
+				return provider.Result{
+					Content: "first turn done",
+					Usage:   provider.Usage{PromptTokens: 10, CompletionTokens: 5000},
+				}
+			}
+			if n < 6 {
+				return provider.Result{
+					ToolCalls: []provider.ToolCall{{
+						ID: fmt.Sprintf("%d", n), Name: "shell",
+						Arguments: fmt.Sprintf(`{"command":"echo phase-%d"}`, n),
+					}},
+					Usage: provider.Usage{PromptTokens: 10, CompletionTokens: 10},
+				}
+			}
+			return provider.Result{
+				Content: "second turn done",
+				Usage:   provider.Usage{PromptTokens: 10, CompletionTokens: 10},
+			}
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err := mgr.Execute(ctx, Options{Goal: "original goal", Root: dir, Prov: mock, MaxSteps: 4}); err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+	r, err := mgr.Followup(ctx, "now do something else")
+	if err != nil {
+		t.Fatalf("follow-up: %v", err)
+	}
+	if r.State != StateCompleted {
+		t.Fatalf("want completed got %s", r.State)
+	}
+	evs, err := mgr.Store.ListEvents(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		if ev.Type == event.StagnationDetected || ev.Type == event.LoopDetected {
+			t.Fatalf("phase reset should not inherit first-turn burn: %s", types(evs))
+		}
+	}
+	if mgr.Hub.Get().TokensCompletion < 5000 {
+		t.Fatal("session token totals should still accumulate")
+	}
+}
+
+func TestFollowupShiftsOnNewObjective(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Judge.Model = ""
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+
+	n := 0
+	mock := &provider.Mock{
+		Name: "mock",
+		Handler: func(provider.Request) provider.Result {
+			n++
+			return provider.Result{Content: "ok", Usage: provider.Usage{CompletionTokens: 4}}
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err := mgr.Execute(ctx, Options{Goal: "fix the auth tests", Root: dir, Prov: mock, MaxSteps: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Followup(ctx, "scratch that, write a new billing report"); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.sess.opts.Goal != "scratch that, write a new billing report" {
+		t.Fatalf("goal %q", mgr.sess.opts.Goal)
+	}
+	evs, err := mgr.Store.ListEvents(ctx, mgr.rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw bool
+	for _, ev := range evs {
+		if ev.Type == event.GoalShifted {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("missing goal.shifted: %s", types(evs))
 	}
 }
 

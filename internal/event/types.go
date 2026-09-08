@@ -10,6 +10,7 @@ const (
 	TaskClassified         = "task.classified"
 	TaskAcceptanceDefined  = "task.acceptance_defined"
 	UserMessage            = "user.message"
+	GoalShifted            = "goal.shifted"
 
 	PlanCreated = "plan.created"
 	PlanUpdated = "plan.updated"

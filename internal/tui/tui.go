@@ -820,6 +820,8 @@ func (m Model) statusOverlay() string {
 	}
 	body := fmt.Sprintf(`run        %s
 state      %s
+goal       %s
+active     %s
 agent      %s
 provider   %s
 model      %s
@@ -829,7 +831,7 @@ tokens     in %d  out %d  judge %d
 reflex     %s  %s
 recovery   %s
 judge      %s`,
-		snap.RunID, snap.State, snap.Agent, nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
+		snap.RunID, snap.State, snap.Goal, nz(snap.ActiveGoal, snap.Goal), snap.Agent, nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
 		snap.BudgetUsed, snap.BudgetMax, snap.TokensPrompt, snap.TokensCompletion, snap.TokensJudge,
 		snap.Reflex.State, strings.Join(snap.Reflex.Reasons, ", "),
 		nz(snap.RecoveryRung, "—"), judge)
@@ -1024,6 +1026,8 @@ func eventHeadline(ev event.Event) string {
 		return fmt.Sprintf("%v  %vms", d["tool"], d["ms"])
 	case event.UserMessage:
 		return asString(d["text"])
+	case event.GoalShifted:
+		return fmt.Sprintf("%s → %s", asString(d["from"]), asString(d["to"]))
 	case event.ModelCompleted:
 		if err, ok := d["error"].(string); ok && err != "" {
 			return "error"

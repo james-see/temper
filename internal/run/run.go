@@ -38,6 +38,7 @@ const (
 type Snapshot struct {
 	RunID            string
 	Goal             string
+	ActiveGoal       string
 	State            string
 	Agent            string
 	Provider         string
@@ -107,8 +108,10 @@ type session struct {
 	step       int
 	workerTok  int
 	judgeTok   int
-	promptTok  int
-	complTok   int
+	promptTok   int
+	complTok    int
+	phasePrompt int
+	phaseCompl  int
 }
 
 type Manager struct {
@@ -185,7 +188,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	}
 	m.Hub.set(func(s *Snapshot) {
 		*s = Snapshot{
-			RunID: id, Goal: opts.Goal, State: StateCreated,
+			RunID: id, Goal: opts.Goal, ActiveGoal: opts.Goal, State: StateCreated,
 			Agent: m.rec.Agent, Provider: m.rec.Provider, Model: m.rec.Model,
 			Workspace: m.rec.Workspace, Started: time.Now(),
 			BudgetMax: m.Cfg.Temper.Budget.MaxCostPerTask,
@@ -273,8 +276,13 @@ func (m *Manager) Followup(ctx context.Context, text string) (store.Run, error) 
 	if text == "" {
 		return m.rec, fmt.Errorf("empty follow-up")
 	}
-	m.sess.opts.MaxSteps = m.sess.step + 24
+	prev := m.sess.opts.Goal
+	same := continuesGoal(prev, text)
+	m.sess.opts.MaxSteps = 24
+	m.sess.step = 0
 	m.sess.stagnation = 0
+	m.sess.phaseCompl = 0
+	m.sess.phasePrompt = 0
 	m.sess.eng = reflex.NewEngine(
 		m.Cfg.Reflex.Detectors.ActionCycle.Repetitions,
 		m.Cfg.Reflex.Detectors.RepeatedError.Threshold,
@@ -283,10 +291,25 @@ func (m *Manager) Followup(ctx context.Context, text string) (store.Run, error) 
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
 	m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))
-	m.Hub.set(func(s *Snapshot) { s.Done = false; s.AwaitReply = false })
-	m.emit(ctx, event.UserMessage, "user", map[string]any{"text": text})
+	if !same {
+		m.sess.opts.Goal = text
+		m.sess.prevPass = nil
+	}
+	m.Hub.set(func(s *Snapshot) {
+		s.Done = false
+		s.AwaitReply = false
+		s.Reflex = reflex.Assessment{}
+		s.RecoveryRung = ""
+		if !same {
+			s.ActiveGoal = text
+		}
+	})
+	m.emit(ctx, event.UserMessage, "user", map[string]any{"text": text, "same_goal": same})
+	if !same {
+		m.emit(ctx, event.GoalShifted, "runtime", map[string]any{"from": prev, "to": text})
+	}
 	m.sess.native.Inject("user", text)
-	m.debug("followup", "run", m.rec.ID, "chars", len(text))
+	m.debug("followup", "run", m.rec.ID, "same_goal", same, "active", m.sess.opts.Goal)
 	return m.drive(ctx)
 }
 
@@ -301,6 +324,7 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 	eval := s.eval
 	prevPass := s.prevPass
 	workerTok, judgeTok, promptTok, complTok := s.workerTok, s.judgeTok, s.promptTok, s.complTok
+	phasePrompt, phaseCompl := s.phasePrompt, s.phaseCompl
 	stagnation := s.stagnation
 	emit := func(typ, actor string, data any) {
 		m.emit(ctx, typ, actor, data)
@@ -309,6 +333,7 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 		s.native = native
 		s.prevPass = prevPass
 		s.workerTok, s.judgeTok, s.promptTok, s.complTok = workerTok, judgeTok, promptTok, complTok
+		s.phasePrompt, s.phaseCompl = phasePrompt, phaseCompl
 		s.stagnation = stagnation
 		s.tried = tried
 	}()
@@ -328,6 +353,8 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 		res := native.Step(ctx)
 		promptTok += res.Usage.PromptTokens
 		complTok += res.Usage.CompletionTokens
+		phasePrompt += res.Usage.PromptTokens
+		phaseCompl += res.Usage.CompletionTokens
 		workerTok = promptTok + complTok
 		m.Hub.set(func(s *Snapshot) {
 			s.TokensWorker = workerTok
@@ -362,7 +389,6 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 		for _, tc := range res.ToolCalls {
 			emit(event.ToolRequested, "native", map[string]any{"tool": tc.Name, "args": clip(tc.Arguments, 400)})
 			m.debug("tool.request", "tool", tc.Name, "args", clip(tc.Arguments, 240))
-			eng.ObserveAction(reflex.NormalizeAction(tc.Name, tc.Arguments))
 			actionNorms = append(actionNorms, reflex.NormalizeAction(tc.Name, tc.Arguments))
 			if reflex.IsExploratory(tc.Name, tc.Arguments) {
 				exploratory = true
@@ -373,7 +399,6 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 			if out.Err != "" {
 				payload["error"] = out.Err
 				fp := reflex.FingerprintError(out.Err)
-				eng.ObserveError(fp)
 				errFPs = append(errFPs, fp)
 				m.debug("tool.result", "tool", out.Name, "ms", out.Duration.Milliseconds(), "err", out.Err)
 			} else {
@@ -425,10 +450,10 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 		assess := eng.Assess(reflex.Signals{
 			Actions:          actionNorms,
 			Errors:           errFPs,
-			Tokens:           complTok,
+			Tokens:           phaseCompl,
 			TokenBurn:        m.Cfg.Reflex.Detectors.TokenBurn.Threshold,
 			PromptTokens:     res.Usage.PromptTokens,
-			CompletionTokens: complTok,
+			CompletionTokens: phaseCompl,
 			EvalPassed:       passed,
 			PrevEvalPass:     prevPass,
 			Meaningful:       meaningful,
@@ -438,6 +463,12 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 		})
 		if passed != nil {
 			prevPass = passed
+		}
+		for _, n := range actionNorms {
+			eng.ObserveAction(n)
+		}
+		for _, fp := range errFPs {
+			eng.ObserveError(fp)
 		}
 
 		judgeUsed := false
