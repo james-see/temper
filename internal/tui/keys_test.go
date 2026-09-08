@@ -2,9 +2,11 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/run"
@@ -143,6 +145,75 @@ func TestRenderModelIO(t *testing.T) {
 	}, 80)
 	if !strings.Contains(s, "now list files") {
 		t.Fatal(s)
+	}
+}
+
+func tallSnap() run.Snapshot {
+	evs := make([]event.Event, 40)
+	for i := range evs {
+		data, _ := json.Marshal(map[string]any{"tool": "shell", "args": fmt.Sprintf(`{"command":"step %d"}`, i)})
+		evs[i] = event.Event{Sequence: uint64(i + 1), Type: event.ToolRequested, Data: data}
+	}
+	return run.Snapshot{Events: evs, Goal: "tall"}
+}
+
+func readyPane(t *testing.T, phase phase) Model {
+	t.Helper()
+	m := New(Options{})
+	m.phase = phase
+	m.ready = true
+	m.follow = true
+	m.vp = viewport.New(40, 5)
+	m.refreshPane(tallSnap())
+	return m
+}
+
+func TestPaneFollowsBottom(t *testing.T) {
+	m := readyPane(t, phaseRunning)
+	if !m.vp.AtBottom() {
+		t.Fatal("follow should pin to latest")
+	}
+	if !m.follow {
+		t.Fatal("follow on")
+	}
+}
+
+func TestScrollUpUnpinsFollow(t *testing.T) {
+	m := readyPane(t, phaseRunning)
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	got := next.(Model)
+	if got.follow {
+		t.Fatal("scroll up should unpin follow")
+	}
+	if got.vp.AtBottom() {
+		t.Fatal("should not be at bottom")
+	}
+	got.refreshPane(tallSnap())
+	if got.vp.AtBottom() {
+		t.Fatal("refresh must not steal scroll")
+	}
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyEnd})
+	got = next.(Model)
+	if !got.follow || !got.vp.AtBottom() {
+		t.Fatal("end should jump to latest and follow")
+	}
+}
+
+func TestDoneArrowsScrollNotType(t *testing.T) {
+	m := readyPane(t, phaseDone)
+	m.input.SetValue("hello")
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	got := next.(Model)
+	if got.input.Value() != "hello" {
+		t.Fatalf("arrow should not edit reply: %q", got.input.Value())
+	}
+	if got.follow {
+		t.Fatal("up should unpin")
+	}
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	got = next.(Model)
+	if !strings.Contains(got.input.Value(), "x") {
+		t.Fatalf("letters still type: %q", got.input.Value())
 	}
 }
 

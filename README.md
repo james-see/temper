@@ -50,7 +50,7 @@ On a TTY, `temper` and `temper run` open an OpenCode-style TUI (subscriber; runt
 
 ### Keys
 
-Command prefix is **ctrl+b** (tmux-style). Letters in the goal prompt always type. After ctrl+b: `s` status · `?` help · `e` last progress/loop · `j`/`k` scroll · `g`/`G` top/bottom · `n` new goal · `q` quit · `esc` cancel prefix. `ctrl+c` cancels immediately. After a run completes, type a follow-up and press enter; **ctrl+b n** starts a new goal.
+Command prefix is **ctrl+b** (tmux-style). Letters in the goal prompt always type. After ctrl+b: `s` status · `?` help · `e` last progress/loop · `j`/`k` scroll · `g`/`G` top/bottom · `n` new goal · `q` quit · `esc` cancel prefix. `ctrl+c` cancels immediately. Log/io panes follow new output; **↑↓** / **pgup/pgdn** / mouse wheel scroll, **end** (or **G** while a run is live) jumps to latest. After a run completes, type a follow-up and press enter; **ctrl+b n** starts a new goal.
 
 ## Config
 

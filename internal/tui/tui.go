@@ -103,6 +103,7 @@ type Model struct {
 	prefix   bool
 	models   []string
 	pane     pane
+	follow   bool
 }
 
 func New(opts Options) Model {
@@ -133,6 +134,7 @@ func New(opts Options) Model {
 		onFollow: opts.OnFollow,
 		catalog:  opts.Catalog,
 		listFn:   opts.ListModels,
+		follow:   true,
 	}
 	if opts.Inspect {
 		m.phase = phaseDone
@@ -237,6 +239,9 @@ func (m *Model) layout() {
 		m.vp.Height = h
 	}
 	m.input.Width = max(20, m.width-8)
+	if m.follow {
+		m.vp.GotoBottom()
+	}
 }
 
 func (m Model) canReply() bool {
@@ -283,9 +288,66 @@ func (m *Model) syncPane() {
 func (m *Model) refreshPane(snap Snapshot) {
 	if m.pane == paneIO {
 		m.vp.SetContent(renderModelIO(snap, m.vp.Width))
-		return
+	} else {
+		m.vp.SetContent(renderEvents(snap.Events, m.vp.Width))
 	}
-	m.vp.SetContent(renderEvents(snap.Events, m.vp.Width))
+	if m.follow {
+		m.vp.GotoBottom()
+	}
+}
+
+func (m *Model) pinFollow() {
+	m.follow = m.vp.AtBottom()
+}
+
+func (m *Model) handleScroll(key string) bool {
+	letters := m.phase == phaseRunning || m.inspect
+	switch key {
+	case "up":
+		m.vp.LineUp(1)
+	case "down":
+		m.vp.LineDown(1)
+	case "k":
+		if !letters {
+			return false
+		}
+		m.vp.LineUp(1)
+	case "j":
+		if !letters {
+			return false
+		}
+		m.vp.LineDown(1)
+	case "pgup", "ctrl+u":
+		m.vp.HalfPageUp()
+	case "pgdown", "pgdn", "ctrl+d":
+		m.vp.HalfPageDown()
+	case "home":
+		m.vp.GotoTop()
+		m.follow = false
+		return true
+	case "end":
+		m.vp.GotoBottom()
+		m.follow = true
+		return true
+	case "g":
+		if !letters {
+			return false
+		}
+		m.vp.GotoTop()
+		m.follow = false
+		return true
+	case "G":
+		if !letters {
+			return false
+		}
+		m.vp.GotoBottom()
+		m.follow = true
+		return true
+	default:
+		return false
+	}
+	m.pinFollow()
+	return true
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -343,6 +405,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tickEvery()
+
+	case tea.MouseMsg:
+		if m.phase == phaseRunning || m.phase == phaseDone || m.inspect {
+			var cmd tea.Cmd
+			m.vp, cmd = m.vp.Update(msg)
+			m.pinFollow()
+			return m, cmd
+		}
 
 	case tea.KeyMsg:
 		next, cmd := m.handleKey(msg)
@@ -407,6 +477,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if (m.phase == phaseRunning || m.phase == phaseDone) && key == "tab" {
 		return m.togglePane()
+	}
+
+	if (m.phase == phaseRunning || m.phase == phaseDone || m.inspect) && m.handleScroll(key) {
+		return m, nil
 	}
 
 	if m.phase == phaseDone && !m.inspect {
@@ -502,15 +576,19 @@ func (m Model) runPrefix(cmd string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "down":
 		m.vp.LineDown(1)
+		m.pinFollow()
 		return m, nil
 	case "up":
 		m.vp.LineUp(1)
+		m.pinFollow()
 		return m, nil
 	case "top":
 		m.vp.GotoTop()
+		m.follow = false
 		return m, nil
 	case "bottom":
 		m.vp.GotoBottom()
+		m.follow = true
 		return m, nil
 	}
 	return m, nil
@@ -661,8 +739,8 @@ func (m Model) viewRun() string {
 	if snap.Started.IsZero() {
 		snap.Started = m.start
 	}
-	header := fmt.Sprintf("TEMPER  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
-		short(snap.RunID, 14), snap.State, nz(snap.Agent, "native"), nz(nz(snap.Provider, m.provider), "—"), nz(nz(snap.Model, m.model), "—"), paneLabel(m.pane))
+	header := fmt.Sprintf("TEMPER  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
+		short(snap.RunID, 14), snap.State, nz(snap.Agent, "native"), nz(nz(snap.Provider, m.provider), "—"), nz(nz(snap.Model, m.model), "—"), paneLabel(m.pane), scrollLabel(m))
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")
@@ -698,9 +776,12 @@ func (m Model) footer(snap Snapshot) string {
 	}
 	hint := m.prefixHint()
 	if snap.Done && !m.inspect && !m.prefix {
-		hint = "enter to reply  ·  ctrl+b n new goal  ·  tab pane  ·  ctrl+c quit"
+		hint = "enter reply  ·  ↑↓ scroll  ·  end latest  ·  ctrl+b n  ·  tab  ·  ctrl+c"
 	} else if !m.prefix {
-		hint = "tab pane  ·  " + hint
+		hint = "↑↓ scroll  ·  G latest  ·  tab  ·  " + hint
+	}
+	if m.ready && !m.vp.AtBottom() {
+		hint = "more ↓  ·  " + hint
 	}
 	return fmt.Sprintf("%s %s  %d%%  %s  reflex %s  in %s / out %s  ·  %s",
 		spin, bar, pct, elapsed, ref, compactTok(snap.TokensPrompt), compactTok(snap.TokensCompletion), hint)
@@ -746,6 +827,10 @@ then:   s status  ? help  e last eval
         t model io  l event log
         j/k scroll  g/G top/bottom
         n new goal  q quit  esc cancel prefix
+↑↓      scroll pane  ·  pgup/pgdn page
+end     jump to latest (re-enables follow)
+g / G   top / latest while a run is live
+wheel   scroll  ·  live follow until you scroll up
 tab     switch log / model io
 ctrl+c  cancel run (no prefix)
 enter   reply in this thread when done`, width)
@@ -764,6 +849,16 @@ func paneLabel(p pane) string {
 		return "io"
 	}
 	return "log"
+}
+
+func scrollLabel(m Model) string {
+	if !m.ready {
+		return "live"
+	}
+	if m.vp.AtBottom() {
+		return "live"
+	}
+	return fmt.Sprintf("%d%%", int(m.vp.ScrollPercent()*100))
 }
 
 func renderEvents(evs []event.Event, width int) string {
@@ -1086,7 +1181,7 @@ func firstUsable(items []pickItem) int {
 }
 
 func Run(opts Options) error {
-	p := tea.NewProgram(New(opts), tea.WithAltScreen())
+	p := tea.NewProgram(New(opts), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
