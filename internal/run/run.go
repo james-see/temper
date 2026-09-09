@@ -218,7 +218,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 			Agent: m.rec.Agent, Provider: m.rec.Provider, Model: m.rec.Model,
 			Workspace: m.rec.Workspace, Started: time.Now(),
 			BudgetMax:  m.Cfg.Temper.Budget.MaxCostPerTask,
-			JudgeOn:    m.Cfg.Reflex.Judge.Model != "",
+			JudgeOn:    m.Cfg.Reflex.Judge.EffectiveEnabled(),
 			ReflexMode: m.Cfg.Reflex.EffectiveMode(),
 		}
 	})
@@ -309,13 +309,14 @@ func (m *Manager) Followup(ctx context.Context, text string) (store.Run, error) 
 	if text == "" {
 		return m.rec, fmt.Errorf("empty follow-up")
 	}
-	prev := m.sess.opts.Goal
-	same := continuesGoal(prev, text)
+	kind := classifyTurn(m.sess.opts.Goal, text)
+	same := kind != turnNew
 	m.sess.opts.MaxSteps = 24
 	m.sess.step = 0
 	m.sess.stagnation = 0
 	m.sess.phaseCompl = 0
 	m.sess.phasePrompt = 0
+	m.sess.thinkChars = 0
 	m.sess.eng = reflex.NewEngine(
 		m.Cfg.Reflex.Detectors.ActionCycle.Repetitions,
 		m.Cfg.Reflex.Detectors.RepeatedError.Threshold,
@@ -323,27 +324,44 @@ func (m *Manager) Followup(ctx context.Context, text string) (store.Run, error) 
 		m.Cfg.Reflex.Detectors.Stagnation.Actions,
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
-	m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))
-	if !same {
-		m.sess.opts.Goal = text
-		m.sess.prevPass = nil
-	}
+	m.adoptUserGoal(ctx, text, kind)
 	m.Hub.set(func(s *Snapshot) {
 		s.Done = false
 		s.AwaitReply = false
 		s.Reflex = reflex.Assessment{}
 		s.RecoveryRung = ""
-		if !same {
-			s.ActiveGoal = text
-		}
 	})
-	m.emit(ctx, event.UserMessage, "user", map[string]any{"text": text, "same_goal": same})
-	if !same {
-		m.emit(ctx, event.GoalShifted, "runtime", map[string]any{"from": prev, "to": text})
-	}
+	m.emit(ctx, event.UserMessage, "user", map[string]any{"text": text, "same_goal": same, "kind": kind})
 	m.sess.native.Inject("user", text)
-	m.debug("followup", "run", m.rec.ID, "same_goal", same, "active", m.sess.opts.Goal)
+	m.debug("followup", "run", m.rec.ID, "kind", kind, "same_goal", same, "active", m.sess.opts.Goal)
 	return m.drive(ctx)
+}
+
+func (m *Manager) adoptUserGoal(ctx context.Context, text, kind string) bool {
+	if m.sess == nil || kind != turnNew {
+		return false
+	}
+	prev := m.sess.opts.Goal
+	if normalizeGoal(prev) == normalizeGoal(text) && prev != "" {
+		return false
+	}
+	m.sess.opts.Goal = text
+	m.sess.prevPass = nil
+	m.sess.pending = nil
+	if m.sess.hermes != nil {
+		m.sess.ladder = reflex.NewLadder(sidecarRecovery(m.Cfg))
+	} else {
+		m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))
+	}
+	m.Hub.set(func(s *Snapshot) {
+		s.ActiveGoal = text
+		s.Reflex = reflex.Assessment{}
+		s.RecoveryRung = ""
+		s.PendingRecovery = ""
+	})
+	m.emit(ctx, event.GoalShifted, "runtime", map[string]any{"from": prev, "to": text, "kind": kind})
+	m.debug("goal.shifted", "from", prev, "to", text)
+	return true
 }
 
 func (m *Manager) drive(ctx context.Context) (store.Run, error) {
@@ -504,29 +522,8 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 			eng.ObserveError(fp)
 		}
 
-		judgeUsed := false
-		if assess.State == reflex.Uncertain && m.Cfg.Reflex.Judge.Model != "" {
-			m.debug("judge.call", "model", m.Cfg.Reflex.Judge.Model, "endpoint", m.Cfg.Reflex.Judge.Endpoint)
-			jr := reflex.InvokeJudge(ctx, m.Cfg.Reflex.Judge.Endpoint, m.Cfg.Reflex.Judge.Model, reflex.JudgeInput{
-				Events:   m.eventDigest(),
-				Tokens:   workerTok,
-				Cost:     costOf(workerTok, judgeTok),
-				EvalNote: fmt.Sprintf("%v", passed),
-			})
-			judgeTok += jr.Usage.PromptTokens + jr.Usage.CompletionTokens
-			m.Hub.set(func(s *Snapshot) { s.TokensJudge = judgeTok; s.JudgeUsed = jr.Used })
-			if jr.Used && jr.Err == nil {
-				assess = jr.Assessment
-				if len(assess.Reasons) == 0 {
-					assess.Reasons = []string{"judge"}
-				}
-				judgeUsed = true
-			} else if jr.Err != nil {
-				m.debug("judge.error", "err", jr.Err.Error())
-			}
-		} else if assess.State == reflex.Uncertain {
-			m.debug("judge.skip", "reason", "no judge model")
-		}
+		assess, judgeUsed, n := m.applyJudge(ctx, assess, workerTok, fmt.Sprintf("%v", passed))
+		judgeTok += n
 
 		emit(event.ProgressEvaluated, "reflex", map[string]any{
 			"state": assess.State, "score": assess.Score, "reasons": assess.Reasons, "judge": judgeUsed,
@@ -644,7 +641,7 @@ func (m *Manager) Hydrate(r store.Run, evs []event.Event) {
 		RunID: r.ID, Goal: r.Goal, State: r.State, Agent: r.Agent, Provider: r.Provider, Model: r.Model,
 		Workspace: r.Workspace, Events: evs, Started: r.CreatedAt, Done: terminal(r.State),
 		BudgetMax: m.Cfg.Temper.Budget.MaxCostPerTask,
-		JudgeOn:   m.Cfg.Reflex.Judge.Model != "",
+		JudgeOn:   m.Cfg.Reflex.Judge.EffectiveEnabled(),
 	}
 	for _, ev := range evs {
 		switch ev.Type {
@@ -738,6 +735,50 @@ func (m *Manager) cancel(ctx context.Context) (store.Run, error) {
 	_ = m.transition(ctx, StateCancelled)
 	m.Hub.set(func(s *Snapshot) { s.Done = true; s.Err = "cancelled" })
 	return m.rec, context.Canceled
+}
+
+func (m *Manager) applyJudge(ctx context.Context, assess reflex.Assessment, workerTok int, evalNote string) (reflex.Assessment, bool, int) {
+	j := m.Cfg.Reflex.Judge
+	if assess.State != reflex.Uncertain {
+		return assess, false, 0
+	}
+	if !j.EffectiveEnabled() {
+		m.debug("judge.skip", "reason", "disabled")
+		return assess, false, 0
+	}
+	if strings.TrimSpace(j.Model) == "" {
+		m.debug("judge.skip", "reason", "no judge model")
+		return assess, false, 0
+	}
+	if j.AutoPull {
+		if err := reflex.EnsureOllamaModel(ctx, j.Endpoint, j.Model); err != nil {
+			m.debug("judge.pull", "err", err.Error(), "model", j.Model)
+		}
+	}
+	m.debug("judge.call", "model", j.Model, "endpoint", j.Endpoint)
+	jr := reflex.InvokeJudge(ctx, j.Endpoint, j.Model, reflex.JudgeInput{
+		Events:   m.eventDigest(),
+		Tokens:   workerTok,
+		Cost:     costOf(workerTok, m.Hub.Get().TokensJudge),
+		EvalNote: evalNote,
+	})
+	n := jr.Usage.PromptTokens + jr.Usage.CompletionTokens
+	m.Hub.set(func(s *Snapshot) {
+		s.TokensJudge += n
+		s.JudgeUsed = jr.Used
+		s.JudgeOn = true
+	})
+	if jr.Used && jr.Err == nil {
+		assess = jr.Assessment
+		if len(assess.Reasons) == 0 {
+			assess.Reasons = []string{"judge"}
+		}
+		return assess, true, n
+	}
+	if jr.Err != nil {
+		m.debug("judge.error", "err", jr.Err.Error())
+	}
+	return assess, false, n
 }
 
 func (m *Manager) eventDigest() string {

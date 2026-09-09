@@ -1122,9 +1122,17 @@ func eventHeadline(ev event.Event) string {
 		}
 		return fmt.Sprintf("%v  %vms", d["tool"], d["ms"])
 	case event.UserMessage:
-		return asString(d["text"])
+		text := asString(d["text"])
+		if k := asString(d["kind"]); k != "" && k != "ack" {
+			return k + "  " + text
+		}
+		return text
 	case event.GoalShifted:
-		return fmt.Sprintf("%s → %s", asString(d["from"]), asString(d["to"]))
+		from, to := asString(d["from"]), asString(d["to"])
+		if from == "" {
+			return "new  " + to
+		}
+		return from + " → " + to
 	case event.ModelThinking:
 		return fmt.Sprintf("think  %v", d["chars"])
 	case event.ModelCompleted:

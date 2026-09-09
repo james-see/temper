@@ -29,6 +29,7 @@ type Signals struct {
 	Step             int
 	ThinkChars       int
 	ThinkOnly        bool
+	ThinkText        string
 }
 
 type Engine struct {
@@ -39,6 +40,7 @@ type Engine struct {
 	Regression   bool
 	actions      []string
 	errors       []string
+	thinks       []string
 }
 
 func NewEngine(actionRep, errorThresh, tokenBurn, stagnation int, regression bool) *Engine {
@@ -78,6 +80,7 @@ func (e *Engine) ObserveError(fp string) {
 func (e *Engine) Reset() {
 	e.actions = nil
 	e.errors = nil
+	e.thinks = nil
 }
 
 func thinkAssessment(chars int) (Assessment, bool) {
@@ -114,6 +117,9 @@ func (e *Engine) Assess(sig Signals) Assessment {
 	}
 	if sig.EvalPassed != nil && *sig.EvalPassed {
 		return Assessment{State: Complete, Score: 1, Reasons: []string{"evaluator-passed"}}
+	}
+	if a, ok := thinkContent(e.thinks, sig.ThinkText); ok {
+		return a
 	}
 	if sig.Meaningful {
 		return Assessment{State: Progressing, Score: 0.7, Reasons: []string{"workspace-delta"}}

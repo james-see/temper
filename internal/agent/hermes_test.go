@@ -84,7 +84,7 @@ func TestParseExportReasoning(t *testing.T) {
 	if cur.n != 1 || len(ings) != 1 || ings[0].Type != "model.thinking" {
 		t.Fatalf("%+v %+v", ings, cur)
 	}
-	if ings[0].Data["chars"] != 13 {
+	if ings[0].Data["chars"] != 13 || ings[0].Data["preview"] != "just thinking" {
 		t.Fatalf("chars %+v", ings[0].Data)
 	}
 	grown := `{"id":"sess","messages":[

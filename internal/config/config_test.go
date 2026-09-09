@@ -8,8 +8,18 @@ import (
 
 func TestDefaultsJudgeModel(t *testing.T) {
 	c := Defaults()
-	if c.Reflex.Judge.Model != "LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M" {
+	if c.Reflex.Judge.Model != DefaultJudgeModel {
 		t.Fatalf("judge model: %s", c.Reflex.Judge.Model)
+	}
+	if !c.Reflex.Judge.EffectiveEnabled() || !c.Reflex.Judge.AutoPull {
+		t.Fatal("judge defaults on")
+	}
+	if !(Judge{}).EffectiveEnabled() {
+		t.Fatal("unset enabled is on")
+	}
+	off := false
+	if (Judge{Enabled: &off}).EffectiveEnabled() {
+		t.Fatal("enabled false")
 	}
 }
 

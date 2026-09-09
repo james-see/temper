@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/james-see/temper/internal/provider"
 )
+
+var pulled sync.Map
 
 type JudgeInput struct {
 	Events   string
@@ -131,6 +134,37 @@ func extractJSON(s string) string {
 		}
 	}
 	return s
+}
+
+func EnsureOllamaModel(ctx context.Context, endpoint, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	if _, ok := pulled.Load(model); ok {
+		return nil
+	}
+	base := firstURL(endpoint, "http://localhost:11434")
+	if strings.HasSuffix(base, "/v1") {
+		base = strings.TrimSuffix(base, "/v1")
+	}
+	body, _ := json.Marshal(map[string]any{"name": model, "stream": false})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/pull", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("ollama pull %s: %d", model, resp.StatusCode)
+	}
+	pulled.Store(model, true)
+	return nil
 }
 
 func looksOllama(endpoint string) bool {

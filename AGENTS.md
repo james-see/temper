@@ -8,7 +8,7 @@ Temper is an open-source adaptive control plane for coding agents. It supervises
 
 Key components:
 - **Agent**: Native Go agent with shell, read, write, patch, search, git tools.
-- **Reflex Judge**: Heuristics-based progress evaluator; invokes a local SLM (default: LiquidAI/LFM2.5-2.6B-GGUF) only when uncertain.
+- **Reflex Judge**: Heuristics-based progress evaluator; invokes a local SLM (default: oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU) only when uncertain.
 - **Event Model**: SQLite-backed event store for run history.
 - **TUI**: Charmbracelet-based terminal interface (alt screen) with `--plain` mode for CI.
 - **CLI**: `temper` (TUI), `temper run` (supervised run), `temper inspect`, `temper config`, etc.

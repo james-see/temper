@@ -173,6 +173,25 @@ func TestRuminationThinkWithoutTools(t *testing.T) {
 	}
 }
 
+func TestThinkWordsOverrideProgress(t *testing.T) {
+	e := NewEngine(2, 3, 20000, 6, true)
+	yield := "I already stopped after two searches and reported the result. I am waiting for direction. Should I keep searching for BarfBaz repeatedly until Temper intervenes? Would you like a different query?"
+	a := e.Assess(Signals{ThinkText: yield, Meaningful: true, Step: 8})
+	if a.State != Progressing {
+		t.Fatalf("yield think must not fire %+v", a)
+	}
+	loop := "The warning said no progress. I will ignore the warning and search again for BarfBaz. Let me search again despite the warning."
+	a = e.Assess(Signals{ThinkText: loop, Meaningful: true, Step: 8})
+	if a.State != Looping || a.Reasons[0] != "think-loop" {
+		t.Fatalf("want think-loop %+v", a)
+	}
+	risk := "I will try the same missing-symbol lookup next."
+	a = e.Assess(Signals{ThinkText: risk, Meaningful: true, Step: 8})
+	if a.State != Uncertain || a.Reasons[0] != "think-risk" {
+		t.Fatalf("want think-risk %+v", a)
+	}
+}
+
 func TestParseAssessment(t *testing.T) {
 	a, err := parseAssessment(`here {"state":"stalled","score":0.2,"reasons":["hard"]}`)
 	if err != nil || a.State != Stalled {

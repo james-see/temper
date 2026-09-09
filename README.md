@@ -86,12 +86,15 @@ v0.1 agent is **native** only (shell, read, write, patch, search, git). External
 
 Heuristics are primary. A local SLM is invoked **only** when the assessment is `Uncertain` (or semantic-stagnation).
 
-Default: [LiquidAI/LFM2.5-2.6B-GGUF](https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF) `Q4_K_M` (~1.67GB) via Ollama, else llama.cpp OpenAI-compat. Missing model → heuristics only. Weights are not vendored.
+Default: Liquid LFM2.5 2.6B `Q4_K_M` (~1.67GB) via Ollama (`oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU`), else llama.cpp OpenAI-compat. Missing model → heuristics only. Weights are not vendored.
 
 LFM Open License v1.0 is **not OSI** (free commercial under $10M revenue). Temper itself is Apache-2.0.
 
 ```bash
-# optional
+# Ollama (default; auto_pull will do this)
+ollama pull oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU
+
+# optional llama.cpp
 llama-server -hf LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
 ```
 

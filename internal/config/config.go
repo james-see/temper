@@ -74,6 +74,9 @@ type PolicyPrefer struct {
 const (
 	ReflexHuman = "human"
 	ReflexAuto  = "auto"
+
+	// DefaultJudgeModel is an Ollama-pullable tag for Liquid LFM2.5 2.6B Q4_K_M.
+	DefaultJudgeModel = "oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU"
 )
 
 type Reflex struct {
@@ -122,9 +125,17 @@ type RecoveryStep struct {
 }
 
 type Judge struct {
+	Enabled  *bool  `yaml:"enabled,omitempty"`
 	Model    string `yaml:"model"`
 	Endpoint string `yaml:"endpoint"`
 	AutoPull bool   `yaml:"auto_pull"`
+}
+
+func (j Judge) EffectiveEnabled() bool {
+	if j.Enabled != nil {
+		return *j.Enabled
+	}
+	return true
 }
 
 type Evaluator struct {
@@ -195,7 +206,9 @@ func Defaults() Config {
 				{After: "exhausted", Action: "human"},
 			},
 			Judge: Judge{
-				Model: "LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M",
+				Enabled:  boolPtr(true),
+				Model:    DefaultJudgeModel,
+				AutoPull: true,
 			},
 		},
 		Evaluator: Evaluator{},
@@ -361,6 +374,11 @@ func applyEnv(cfg *Config, sources map[string]string) {
 			sources["providers."+name+".api_key"] = "env:OLLAMA_API_KEY"
 		}
 	}
+	if v := os.Getenv("TEMPER_JUDGE"); v != "" {
+		on := parseBoolish(v)
+		cfg.Reflex.Judge.Enabled = &on
+		sources["reflex.judge.enabled"] = "env:TEMPER_JUDGE"
+	}
 	if v := os.Getenv("TEMPER_JUDGE_MODEL"); v != "" {
 		cfg.Reflex.Judge.Model = v
 		sources["reflex.judge.model"] = "env:TEMPER_JUDGE_MODEL"
@@ -368,6 +386,17 @@ func applyEnv(cfg *Config, sources map[string]string) {
 	if v := os.Getenv("TEMPER_JUDGE_ENDPOINT"); v != "" {
 		cfg.Reflex.Judge.Endpoint = v
 		sources["reflex.judge.endpoint"] = "env:TEMPER_JUDGE_ENDPOINT"
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func parseBoolish(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false", "off", "no":
+		return false
+	default:
+		return true
 	}
 }
 

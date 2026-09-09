@@ -25,6 +25,7 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		s.Model = ""
 		s.Workspace = ws.Root()
 		s.Attach = "session+logs"
+		s.JudgeOn = m.Cfg.Reflex.Judge.EffectiveEnabled()
 	})
 
 	h := opts.Hermes
@@ -108,15 +109,35 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		if pollErr != nil {
 			m.debug("hermes.poll", "err", pollErr.Error())
 		}
-		for _, ing := range ings {
-			emit(ing.Type, "hermes", ing.Data)
+		userOnly := sidecarUserOnly(ings)
+		goalShift := false
+		for i, ing := range ings {
 			if ing.Type == event.UserMessage {
+				text := strings.TrimSpace(fmt.Sprint(ing.Data["text"]))
+				kind := classifyTurn(s.opts.Goal, text)
+				if ing.Data == nil {
+					ing.Data = map[string]any{}
+				}
+				ing.Data["kind"] = kind
+				ing.Data["same_goal"] = kind != turnNew
+				ings[i] = ing
+				if m.adoptUserGoal(ctx, text, kind) {
+					goalShift = true
+				}
 				eng.Reset()
 				s.stagnation = 0
 				s.thinkChars = 0
+				s.step = 0
+				s.phaseCompl = 0
+				s.phasePrompt = 0
 			}
+			emit(ing.Type, "hermes", ing.Data)
 		}
-		actionNorms, errFPs, meaningful, thinkDelta, _ := sidecarSignals(ings)
+		if goalShift {
+			lastState = ""
+			lastReasons = ""
+		}
+		actionNorms, errFPs, meaningful, thinkDelta, _, thinkText := sidecarSignals(ings)
 		s.thinkChars += thinkDelta
 		thinkOnly := s.thinkChars > 0 && len(actionNorms) == 0 && !meaningful
 		if id := h.SessionID(); id != "" {
@@ -163,6 +184,25 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			continue
 		}
 
+		if userOnly {
+			if m.shouldApplyPending() {
+				if err := m.applyPending(ctx, emit); err != nil {
+					return m.rec, err
+				}
+			}
+			select {
+			case <-ctx.Done():
+				_ = h.Interrupt(ctx, h.SessionID())
+				return m.cancel(ctx)
+			case <-s.approve:
+				if err := m.applyPending(ctx, emit); err != nil {
+					return m.rec, err
+				}
+			case <-tick.C:
+			}
+			continue
+		}
+
 		s.step++
 		s.stagnation = 0
 		m.Hub.set(func(snap *Snapshot) { snap.Step = s.step })
@@ -177,9 +217,13 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			Meaningful:  meaningful,
 			ThinkChars:  s.thinkChars,
 			ThinkOnly:   thinkOnly,
+			ThinkText:   thinkText,
 		})
 		if len(actionNorms) > 0 || meaningful {
 			s.thinkChars = 0
+		}
+		if thinkText != "" {
+			eng.ObserveThink(thinkText)
 		}
 		for _, n := range actionNorms {
 			eng.ObserveAction(n)
@@ -187,10 +231,11 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		for _, fp := range errFPs {
 			eng.ObserveError(fp)
 		}
+		assess, judgeUsed, _ := m.applyJudge(ctx, assess, s.phaseCompl, "")
 		reasonKey := strings.Join(assess.Reasons, ",")
 		if assess.State != lastState || reasonKey != lastReasons {
 			emit(event.ProgressEvaluated, "reflex", map[string]any{
-				"state": assess.State, "score": assess.Score, "reasons": assess.Reasons,
+				"state": assess.State, "score": assess.Score, "reasons": assess.Reasons, "judge": judgeUsed,
 			})
 			lastState = assess.State
 			lastReasons = reasonKey
@@ -200,6 +245,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			snap.Progress = assess.Score
 			snap.LastEvalSeq = m.seq
 			snap.ReflexMode = m.mode()
+			snap.JudgeOn = m.Cfg.Reflex.Judge.EffectiveEnabled()
 		})
 
 		switch assess.State {
@@ -244,7 +290,20 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 	}
 }
 
-func sidecarSignals(ings []agent.Ingest) (actions, errors []string, meaningful bool, thinkChars int, thinkOnly bool) {
+func sidecarUserOnly(ings []agent.Ingest) bool {
+	hasUser := false
+	for _, ing := range ings {
+		switch ing.Type {
+		case event.UserMessage:
+			hasUser = true
+		case event.ToolRequested, event.ToolCompleted, event.ModelThinking, event.ModelCompleted:
+			return false
+		}
+	}
+	return hasUser
+}
+
+func sidecarSignals(ings []agent.Ingest) (actions, errors []string, meaningful bool, thinkChars int, thinkOnly bool, thinkText string) {
 	hasTool := false
 	hasText := false
 	for _, ing := range ings {
@@ -261,13 +320,19 @@ func sidecarSignals(ings []agent.Ingest) (actions, errors []string, meaningful b
 			}
 		case event.ModelThinking:
 			thinkChars += ingestInt(ing.Data, "delta")
+			if p := strings.TrimSpace(fmt.Sprint(ing.Data["preview"])); p != "" && p != "<nil>" {
+				if thinkText != "" {
+					thinkText += "\n"
+				}
+				thinkText += p
+			}
 		case event.ModelCompleted:
 			hasText = true
 			meaningful = true
 		}
 	}
 	thinkOnly = thinkChars > 0 && !hasTool && !hasText && !meaningful
-	return actions, errors, meaningful, thinkChars, thinkOnly
+	return actions, errors, meaningful, thinkChars, thinkOnly, thinkText
 }
 
 func ingestInt(data map[string]any, key string) int {

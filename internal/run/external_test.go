@@ -281,31 +281,31 @@ func TestExternalLiveOwnerHolds(t *testing.T) {
 }
 
 func TestSidecarSignals(t *testing.T) {
-	actions, errs, meaningful, think, only := sidecarSignals([]agent.Ingest{
+	actions, errs, meaningful, think, only, preview := sidecarSignals([]agent.Ingest{
 		{Type: event.ToolRequested, Data: map[string]any{"tool": "read_file", "args": `{"path":"a.go"}`}},
 		{Type: event.ToolCompleted, Data: map[string]any{"tool": "read_file", "output": "ok"}},
 	})
-	if !meaningful || len(actions) != 1 || len(errs) != 0 || think != 0 || only {
-		t.Fatalf("%v %v %v think=%d only=%v", meaningful, actions, errs, think, only)
+	if !meaningful || len(actions) != 1 || len(errs) != 0 || think != 0 || only || preview != "" {
+		t.Fatalf("%v %v %v think=%d only=%v preview=%q", meaningful, actions, errs, think, only, preview)
 	}
-	_, _, meaningful, _, _ = sidecarSignals([]agent.Ingest{
+	_, _, meaningful, _, _, _ = sidecarSignals([]agent.Ingest{
 		{Type: event.ToolCompleted, Data: map[string]any{"tool": "read_file", "output": `{"status": "unchanged"}`}},
 	})
 	if meaningful {
 		t.Fatal("unchanged re-read is not progress")
 	}
-	_, _, meaningful, think, only = sidecarSignals([]agent.Ingest{
+	_, _, meaningful, think, only, _ = sidecarSignals([]agent.Ingest{
 		{Type: event.ModelThinking, Data: map[string]any{"chars": 4000, "delta": 4000, "tool_calls": 0, "text": false}},
 	})
 	if meaningful || think != 4000 || !only {
 		t.Fatalf("think-only meaningful=%v think=%d only=%v", meaningful, think, only)
 	}
-	_, _, _, think, only = sidecarSignals([]agent.Ingest{
-		{Type: event.ModelThinking, Data: map[string]any{"delta": 8000}},
+	_, _, _, think, only, preview = sidecarSignals([]agent.Ingest{
+		{Type: event.ModelThinking, Data: map[string]any{"delta": 8000, "preview": "let me search again"}},
 		{Type: event.ToolRequested, Data: map[string]any{"tool": "shell", "args": `{"command":"ls"}`}},
 	})
-	if think != 8000 || only {
-		t.Fatalf("think+tool should not be rumination think=%d only=%v", think, only)
+	if think != 8000 || only || preview != "let me search again" {
+		t.Fatalf("think+tool think=%d only=%v preview=%q", think, only, preview)
 	}
 }
 
@@ -338,4 +338,78 @@ func TestExternalIdleDoesNotStall(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestSidecarClassifiesUserTurns(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Judge.Model = ""
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	h := fakeHermes(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = mgr.Execute(ctx, Options{Root: dir, Agent: "hermes", SkipSpawn: true, Hermes: h, Goal: "list the files here"})
+	}()
+	waitEvent(t, mgr, event.AgentStarted, 3*time.Second)
+	h.Queue(agent.Ingest{Type: event.UserMessage, Data: map[string]any{"text": "can we run a speedtest cli please"}})
+	waitEvent(t, mgr, event.GoalShifted, 3*time.Second)
+	if got := mgr.Hub.Get().ActiveGoal; got != "can we run a speedtest cli please" {
+		t.Fatalf("active %q", got)
+	}
+	h.Queue(agent.Ingest{Type: event.UserMessage, Data: map[string]any{"text": "why so slow"}})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if mgr.sess != nil && mgr.sess.opts.Goal == "can we run a speedtest cli please" {
+			var users int
+			for _, ev := range mgr.Hub.Get().Events {
+				if ev.Type == event.UserMessage {
+					users++
+				}
+			}
+			if users >= 2 {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if mgr.sess.opts.Goal != "can we run a speedtest cli please" {
+		t.Fatalf("follow-up shifted goal to %q", mgr.sess.opts.Goal)
+	}
+	shifts, evals := 0, 0
+	for _, ev := range mgr.Hub.Get().Events {
+		if ev.Type == event.GoalShifted {
+			shifts++
+		}
+		if ev.Type == event.ProgressEvaluated {
+			evals++
+		}
+	}
+	if shifts != 1 {
+		t.Fatalf("goal.shifted count %d", shifts)
+	}
+	if evals != 0 {
+		t.Fatal("user-only turn should not emit progressing")
+	}
+	cancel()
+	<-done
+}
+
+func TestSidecarUserOnly(t *testing.T) {
+	if !sidecarUserOnly([]agent.Ingest{{Type: event.UserMessage, Data: map[string]any{"text": "hi"}}}) {
+		t.Fatal("user only")
+	}
+	if sidecarUserOnly([]agent.Ingest{
+		{Type: event.UserMessage, Data: map[string]any{"text": "hi"}},
+		{Type: event.ToolRequested, Data: map[string]any{"tool": "shell"}},
+	}) {
+		t.Fatal("mixed")
+	}
 }

@@ -88,7 +88,7 @@ func thinkGrowth(msgs []any, cur exportCursor) (Ingest, bool) {
 	if id == "" || id != cur.lastID || rlen <= cur.thinkLen {
 		return Ingest{}, false
 	}
-	return thinkingIngest(rlen, rlen-cur.thinkLen, extractToolCalls(last), messageText(last) != ""), true
+	return thinkingIngest(rlen, rlen-cur.thinkLen, extractToolCalls(last), messageText(last) != "", messageReasoning(last)), true
 }
 
 func lastMessage(msgs []any) (map[string]any, bool) {
@@ -138,7 +138,7 @@ func ingestMessage(raw map[string]any) []Ingest {
 		calls := extractToolCalls(raw)
 		text := messageText(raw)
 		if reason := messageReasoning(raw); reason != "" {
-			out = append(out, thinkingIngest(len(reason), len(reason), calls, text != ""))
+			out = append(out, thinkingIngest(len(reason), len(reason), calls, text != "", reason))
 		}
 		for _, tc := range calls {
 			out = append(out, Ingest{Type: "tool.requested", Data: map[string]any{"tool": tc.name, "args": tc.args}})
@@ -210,9 +210,10 @@ func extractToolCalls(raw map[string]any) []toolCall {
 	return out
 }
 
-func thinkingIngest(chars, delta int, calls []toolCall, hasText bool) Ingest {
+func thinkingIngest(chars, delta int, calls []toolCall, hasText bool, reason string) Ingest {
 	return Ingest{Type: "model.thinking", Data: map[string]any{
 		"chars": chars, "delta": delta, "tool_calls": len(calls), "text": hasText,
+		"preview": clip(reason, 1500),
 	}}
 }
 

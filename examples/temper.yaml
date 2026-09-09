@@ -104,12 +104,14 @@ reflex:
     - after: exhausted
       action: human
 
-  # Optional local critic. Invoked only when heuristics return Uncertain.
-  # Default weights: LiquidAI/LFM2.5-2.6B-GGUF Q4_K_M (~1.67GB).
+  # Local critic. Default on. Invoked when heuristics return Uncertain.
+  # Default weights: Liquid LFM2.5 2.6B Q4_K_M via Ollama (~1.67GB).
   # LFM Open License v1.0 — not OSI; free commercial under $10M revenue.
   # Temper stays Apache-2.0. Weights are not vendored.
-  # Serve via Ollama if present, else: llama-server -hf LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  # auto_pull asks local Ollama to fetch the model on first miss.
+  # TEMPER_JUDGE=off disables. TEMPER_JUDGE_MODEL overrides the weights.
   judge:
-    model: LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+    enabled: true
+    model: oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU
     endpoint: ""
-    auto_pull: false
+    auto_pull: true
