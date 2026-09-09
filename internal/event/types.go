@@ -20,6 +20,7 @@ const (
 	AgentStopped   = "agent.stopped"
 	AgentSwitched  = "agent.switched"
 	ModelCalled    = "model.called"
+	ModelThinking  = "model.thinking"
 	ModelCompleted = "model.completed"
 
 	ToolRequested      = "tool.requested"

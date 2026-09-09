@@ -85,10 +85,10 @@ type Reflex struct {
 
 func (r Reflex) EffectiveMode() string {
 	switch strings.ToLower(strings.TrimSpace(r.Mode)) {
-	case ReflexAuto:
-		return ReflexAuto
-	default:
+	case ReflexHuman:
 		return ReflexHuman
+	default:
+		return ReflexAuto
 	}
 }
 
@@ -179,7 +179,7 @@ func Defaults() Config {
 			"hermes": {Type: "hermes"},
 		},
 		Reflex: Reflex{
-			Mode: ReflexHuman,
+			Mode: ReflexAuto,
 			Detectors: ReflexDetectors{
 				RepeatedError: DetectorThresh{Threshold: 3},
 				ActionCycle:   DetectorRep{Repetitions: 2},

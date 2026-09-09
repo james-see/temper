@@ -108,10 +108,17 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		if pollErr != nil {
 			m.debug("hermes.poll", "err", pollErr.Error())
 		}
-		actionNorms, errFPs, meaningful := sidecarSignals(ings)
 		for _, ing := range ings {
 			emit(ing.Type, "hermes", ing.Data)
+			if ing.Type == event.UserMessage {
+				eng.Reset()
+				s.stagnation = 0
+				s.thinkChars = 0
+			}
 		}
+		actionNorms, errFPs, meaningful, thinkDelta, _ := sidecarSignals(ings)
+		s.thinkChars += thinkDelta
+		thinkOnly := s.thinkChars > 0 && len(actionNorms) == 0 && !meaningful
 		if id := h.SessionID(); id != "" {
 			m.Hub.set(func(snap *Snapshot) { snap.SessionID = id; snap.Attach = "session+logs" })
 			if !bound {
@@ -135,13 +142,30 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			continue
 		}
 
-		// Sidecar ticks are 1s observations, not agent turns. Empty polls while
-		// the TUI is idle (or the user is typing) are not stagnation.
-		if len(ings) > 0 {
-			s.step++
-			s.stagnation = 0
-			m.Hub.set(func(snap *Snapshot) { snap.Step = s.step })
+		// Empty 1s polls are not a turn. Thinking growth still arrives as ingest
+		// when Hermes flushes or updates the last assistant row.
+		if len(ings) == 0 {
+			if m.shouldApplyPending() {
+				if err := m.applyPending(ctx, emit); err != nil {
+					return m.rec, err
+				}
+			}
+			select {
+			case <-ctx.Done():
+				_ = h.Interrupt(ctx, h.SessionID())
+				return m.cancel(ctx)
+			case <-s.approve:
+				if err := m.applyPending(ctx, emit); err != nil {
+					return m.rec, err
+				}
+			case <-tick.C:
+			}
+			continue
 		}
+
+		s.step++
+		s.stagnation = 0
+		m.Hub.set(func(snap *Snapshot) { snap.Step = s.step })
 
 		assess := eng.Assess(reflex.Signals{
 			Actions:     actionNorms,
@@ -151,7 +175,12 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			StagnationN: s.stagnation,
 			Step:        s.step,
 			Meaningful:  meaningful,
+			ThinkChars:  s.thinkChars,
+			ThinkOnly:   thinkOnly,
 		})
+		if len(actionNorms) > 0 || meaningful {
+			s.thinkChars = 0
+		}
 		for _, n := range actionNorms {
 			eng.ObserveAction(n)
 		}
@@ -159,7 +188,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			eng.ObserveError(fp)
 		}
 		reasonKey := strings.Join(assess.Reasons, ",")
-		if len(ings) > 0 || assess.State != lastState || reasonKey != lastReasons {
+		if assess.State != lastState || reasonKey != lastReasons {
 			emit(event.ProgressEvaluated, "reflex", map[string]any{
 				"state": assess.State, "score": assess.Score, "reasons": assess.Reasons,
 			})
@@ -215,22 +244,57 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 	}
 }
 
-func sidecarSignals(ings []agent.Ingest) (actions, errors []string, meaningful bool) {
+func sidecarSignals(ings []agent.Ingest) (actions, errors []string, meaningful bool, thinkChars int, thinkOnly bool) {
+	hasTool := false
+	hasText := false
 	for _, ing := range ings {
 		switch ing.Type {
 		case event.ToolRequested:
-			meaningful = true
+			hasTool = true
 			actions = append(actions, reflex.NormalizeAction(fmt.Sprint(ing.Data["tool"]), fmt.Sprint(ing.Data["args"])))
 		case event.ToolCompleted:
-			meaningful = true
 			if e, _ := ing.Data["error"].(string); e != "" {
 				errors = append(errors, reflex.FingerprintError(e))
 			}
+			if !sidecarNoop(ing) {
+				meaningful = true
+			}
+		case event.ModelThinking:
+			thinkChars += ingestInt(ing.Data, "delta")
 		case event.ModelCompleted:
+			hasText = true
 			meaningful = true
 		}
 	}
-	return actions, errors, meaningful
+	thinkOnly = thinkChars > 0 && !hasTool && !hasText && !meaningful
+	return actions, errors, meaningful, thinkChars, thinkOnly
+}
+
+func ingestInt(data map[string]any, key string) int {
+	switch v := data[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func sidecarNoop(ing agent.Ingest) bool {
+	if e, _ := ing.Data["error"].(string); e != "" {
+		return true
+	}
+	out := strings.ToLower(fmt.Sprint(ing.Data["output"]))
+	if strings.Contains(out, "file unchanged") || strings.Contains(out, `"status": "unchanged"`) {
+		return true
+	}
+	if strings.Contains(out, "blocked:") {
+		return true
+	}
+	return false
 }
 
 func (m *Manager) mode() string {

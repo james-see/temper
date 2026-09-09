@@ -74,7 +74,7 @@ evaluator:
   compile: ""
 
 reflex:
-  mode: human   # human | auto — ctrl+b a toggles live
+  mode: auto   # auto | human — ctrl+b a toggles live
 
   detectors:
     repeated_error:

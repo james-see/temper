@@ -2,22 +2,29 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
 
-func parseExportOutput(out string, seen int) ([]Ingest, int) {
+type exportCursor struct {
+	n        int
+	lastID   string
+	thinkLen int
+}
+
+func parseExportOutput(out string, cur exportCursor) ([]Ingest, exportCursor) {
 	var raw map[string]any
 	if json.Unmarshal([]byte(strings.TrimSpace(out)), &raw) == nil {
 		if msgs, ok := raw["messages"].([]any); ok {
-			return parseMessageSlice(msgs, seen), len(msgs)
+			return parseMessageSlice(msgs, cur)
 		}
 	}
 	lines := splitNonEmpty(out)
 	if len(lines) == 0 {
-		return nil, seen
+		return nil, cur
 	}
-	start := seen
+	start := cur.n
 	if start > len(lines) {
 		start = 0
 	}
@@ -25,7 +32,8 @@ func parseExportOutput(out string, seen int) ([]Ingest, int) {
 	for _, line := range lines[start:] {
 		evs = append(evs, parseMessageLine(line)...)
 	}
-	return evs, len(lines)
+	cur.n = len(lines)
+	return evs, cur
 }
 
 func parseMessageLine(line string) []Ingest {
@@ -38,24 +46,67 @@ func parseMessageLine(line string) []Ingest {
 		return nil
 	}
 	if msgs, ok := raw["messages"].([]any); ok {
-		return parseMessageSlice(msgs, 0)
+		evs, _ := parseMessageSlice(msgs, exportCursor{})
+		return evs
 	}
 	return ingestMessage(raw)
 }
 
-func parseMessageSlice(msgs []any, seen int) []Ingest {
-	if seen > len(msgs) {
-		seen = 0
+func parseMessageSlice(msgs []any, cur exportCursor) ([]Ingest, exportCursor) {
+	if cur.n > len(msgs) {
+		cur.n = 0
 	}
 	var evs []Ingest
-	for _, item := range msgs[seen:] {
+	grew := len(msgs) > cur.n
+	for _, item := range msgs[cur.n:] {
 		raw, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
 		evs = append(evs, ingestMessage(raw)...)
 	}
-	return evs
+	if !grew {
+		if ing, ok := thinkGrowth(msgs, cur); ok {
+			evs = append(evs, ing)
+		}
+	}
+	cur.n = len(msgs)
+	if last, ok := lastMessage(msgs); ok {
+		cur.lastID = messageID(last)
+		cur.thinkLen = len(messageReasoning(last))
+	}
+	return evs, cur
+}
+
+func thinkGrowth(msgs []any, cur exportCursor) (Ingest, bool) {
+	last, ok := lastMessage(msgs)
+	if !ok {
+		return Ingest{}, false
+	}
+	id := messageID(last)
+	rlen := len(messageReasoning(last))
+	if id == "" || id != cur.lastID || rlen <= cur.thinkLen {
+		return Ingest{}, false
+	}
+	return thinkingIngest(rlen, rlen-cur.thinkLen, extractToolCalls(last), messageText(last) != ""), true
+}
+
+func lastMessage(msgs []any) (map[string]any, bool) {
+	if len(msgs) == 0 {
+		return nil, false
+	}
+	raw, ok := msgs[len(msgs)-1].(map[string]any)
+	return raw, ok
+}
+
+func messageID(raw map[string]any) string {
+	if s := firstString(raw, "id"); s != "" {
+		return s
+	}
+	if raw["id"] == nil {
+		return ""
+	}
+	return fmt.Sprint(raw["id"])
 }
 
 func ingestMessage(raw map[string]any) []Ingest {
@@ -76,18 +127,23 @@ func ingestMessage(raw map[string]any) []Ingest {
 		if name == "" {
 			name = "hermes"
 		}
-		data := map[string]any{"tool": name, "output": messageText(raw)}
-		if err := firstString(raw, "error"); err != "" {
+		text := messageText(raw)
+		data := map[string]any{"tool": name, "output": text}
+		if err := toolError(raw, text); err != "" {
 			data["error"] = err
 		}
 		return []Ingest{{Type: "tool.completed", Data: data}}
 	case "assistant", "model", "agent", "ai":
 		var out []Ingest
 		calls := extractToolCalls(raw)
+		text := messageText(raw)
+		if reason := messageReasoning(raw); reason != "" {
+			out = append(out, thinkingIngest(len(reason), len(reason), calls, text != ""))
+		}
 		for _, tc := range calls {
 			out = append(out, Ingest{Type: "tool.requested", Data: map[string]any{"tool": tc.name, "args": tc.args}})
 		}
-		if text := messageText(raw); text != "" {
+		if text != "" {
 			out = append(out, Ingest{Type: "model.completed", Data: map[string]any{"content": text, "tool_calls": len(calls)}})
 		}
 		return out
@@ -99,6 +155,26 @@ func ingestMessage(raw map[string]any) []Ingest {
 type toolCall struct {
 	name string
 	args string
+}
+
+func toolError(raw map[string]any, text string) string {
+	if e := firstString(raw, "error"); e != "" && e != "null" {
+		return e
+	}
+	var payload struct {
+		Error    any  `json:"error"`
+		ExitCode *int `json:"exit_code"`
+	}
+	if json.Unmarshal([]byte(text), &payload) != nil {
+		return ""
+	}
+	if payload.ExitCode != nil && *payload.ExitCode != 0 {
+		return fmt.Sprintf("exit %d", *payload.ExitCode)
+	}
+	if s, ok := payload.Error.(string); ok && s != "" {
+		return s
+	}
+	return ""
 }
 
 func extractToolCalls(raw map[string]any) []toolCall {
@@ -132,6 +208,47 @@ func extractToolCalls(raw map[string]any) []toolCall {
 		out = append(out, toolCall{name: name, args: args})
 	}
 	return out
+}
+
+func thinkingIngest(chars, delta int, calls []toolCall, hasText bool) Ingest {
+	return Ingest{Type: "model.thinking", Data: map[string]any{
+		"chars": chars, "delta": delta, "tool_calls": len(calls), "text": hasText,
+	}}
+}
+
+func messageReasoning(raw map[string]any) string {
+	if s := firstString(raw, "reasoning", "reasoning_content"); s != "" {
+		return s
+	}
+	if s := anyReasoning(raw["content"]); s != "" {
+		return s
+	}
+	return ""
+}
+
+func anyReasoning(v any) string {
+	arr, ok := v.([]any)
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	for _, item := range arr {
+		p, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ := strings.ToLower(firstString(p, "type"))
+		if typ != "thinking" && typ != "reasoning" && typ != "think" {
+			continue
+		}
+		if s := firstString(p, "thinking", "reasoning", "text", "content"); s != "" {
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(s)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func messageText(raw map[string]any) string {

@@ -1,6 +1,9 @@
 package reflex
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRepeatedActionLoop(t *testing.T) {
 	e := NewEngine(2, 3, 20000, 6, true)
@@ -79,6 +82,46 @@ func TestTokenBurnIgnoresPromptPrefill(t *testing.T) {
 	}
 }
 
+func TestAlternatingRebuildCycle(t *testing.T) {
+	e := NewEngine(2, 3, 20000, 6, true)
+	rm := NormalizeAction("terminal", `{"command":"cd /Users/jc/p/temper && rm -rf dist/* && mkdir -p dist"}`)
+	build := NormalizeAction("terminal", `{"command":"cd /Users/jc/p/temper && VERSION=0.1.9 && for GOOS in darwin linux; do echo build; done"}`)
+	if rm == build || !strings.Contains(rm, "rm -rf") {
+		t.Fatalf("norm %q %q", rm, build)
+	}
+	e.ObserveAction(rm)
+	e.ObserveAction(build)
+	e.ObserveAction(rm)
+	a := e.Assess(Signals{Actions: []string{build}, Meaningful: true, Step: 10})
+	if a.State != Looping || a.Reasons[0] != "repeated-cycle" {
+		t.Fatalf("want repeated-cycle got %s %v", a.State, a.Reasons)
+	}
+}
+
+func TestExploreCycleIsNotLoop(t *testing.T) {
+	e := NewEngine(2, 3, 20000, 6, true)
+	ls := NormalizeAction("terminal", `{"command":"ls -la /tmp"}`)
+	rd := NormalizeAction("read_file", `{"path":"/tmp/README.md"}`)
+	e.ObserveAction(ls)
+	e.ObserveAction(rd)
+	e.ObserveAction(ls)
+	a := e.Assess(Signals{Actions: []string{rd}, Step: 8})
+	if a.State == Looping {
+		t.Fatalf("explore cycle must not loop: %v", a.Reasons)
+	}
+}
+
+func TestNormalizeStripsCDAndPath(t *testing.T) {
+	a := NormalizeAction("terminal", `{"command":"cd /x && go test ./..."}`)
+	b := NormalizeAction("terminal", `{"command":"go test ./..."}`)
+	if a != b {
+		t.Fatalf("%q vs %q", a, b)
+	}
+	if NormalizeAction("read_file", `{"path":"/p/site","offset":20}`) != NormalizeAction("read_file", `{"path":"/p/site"}`) {
+		t.Fatal("read path")
+	}
+}
+
 func TestSameExploreRepeatsLoop(t *testing.T) {
 	e := NewEngine(2, 3, 20000, 6, true)
 	ls := NormalizeAction("shell", `{"command":"ls -la"}`)
@@ -105,6 +148,28 @@ func TestLadderBackoff(t *testing.T) {
 	}
 	if _, ok := l.Next(); ok {
 		t.Fatal("expected exhausted")
+	}
+}
+
+func TestRuminationThinkWithoutTools(t *testing.T) {
+	e := NewEngine(2, 3, 20000, 6, true)
+	e.ObserveAction("write:a")
+	e.ObserveAction("patch:b")
+	a := e.Assess(Signals{ThinkOnly: true, ThinkChars: 800, Step: 8})
+	if a.State != Progressing || a.Reasons[0] != "thinking" {
+		t.Fatalf("short think %+v", a)
+	}
+	a = e.Assess(Signals{ThinkOnly: true, ThinkChars: ThinkUncertain, Step: 8})
+	if a.State != Uncertain || a.Reasons[0] != "rumination" {
+		t.Fatalf("want rumination uncertain %+v", a)
+	}
+	a = e.Assess(Signals{ThinkOnly: true, ThinkChars: ThinkStalled, Step: 8})
+	if a.State != Stalled || a.Reasons[0] != "rumination" {
+		t.Fatalf("want rumination stall %+v", a)
+	}
+	a = e.Assess(Signals{ThinkChars: ThinkStalled, ThinkOnly: false, Actions: []string{"read:x"}, Step: 8})
+	if a.State == Stalled && len(a.Reasons) > 0 && a.Reasons[0] == "rumination" {
+		t.Fatalf("think+tool is not rumination %+v", a)
 	}
 }
 

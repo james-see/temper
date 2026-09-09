@@ -281,18 +281,31 @@ func TestExternalLiveOwnerHolds(t *testing.T) {
 }
 
 func TestSidecarSignals(t *testing.T) {
-	actions, errs, meaningful := sidecarSignals([]agent.Ingest{
-		{Type: event.UserMessage, Data: map[string]any{"text": "hi"}},
-		{Type: event.ToolRequested, Data: map[string]any{"tool": "read_file", "args": "a.go"}},
+	actions, errs, meaningful, think, only := sidecarSignals([]agent.Ingest{
+		{Type: event.ToolRequested, Data: map[string]any{"tool": "read_file", "args": `{"path":"a.go"}`}},
+		{Type: event.ToolCompleted, Data: map[string]any{"tool": "read_file", "output": "ok"}},
 	})
-	if !meaningful || len(actions) != 1 || len(errs) != 0 {
-		t.Fatalf("%v %v %v", meaningful, actions, errs)
+	if !meaningful || len(actions) != 1 || len(errs) != 0 || think != 0 || only {
+		t.Fatalf("%v %v %v think=%d only=%v", meaningful, actions, errs, think, only)
 	}
-	_, _, meaningful = sidecarSignals([]agent.Ingest{
-		{Type: event.UserMessage, Data: map[string]any{"text": "hi"}},
+	_, _, meaningful, _, _ = sidecarSignals([]agent.Ingest{
+		{Type: event.ToolCompleted, Data: map[string]any{"tool": "read_file", "output": `{"status": "unchanged"}`}},
 	})
 	if meaningful {
-		t.Fatal("user text is not workspace progress")
+		t.Fatal("unchanged re-read is not progress")
+	}
+	_, _, meaningful, think, only = sidecarSignals([]agent.Ingest{
+		{Type: event.ModelThinking, Data: map[string]any{"chars": 4000, "delta": 4000, "tool_calls": 0, "text": false}},
+	})
+	if meaningful || think != 4000 || !only {
+		t.Fatalf("think-only meaningful=%v think=%d only=%v", meaningful, think, only)
+	}
+	_, _, _, think, only = sidecarSignals([]agent.Ingest{
+		{Type: event.ModelThinking, Data: map[string]any{"delta": 8000}},
+		{Type: event.ToolRequested, Data: map[string]any{"tool": "shell", "args": `{"command":"ls"}`}},
+	})
+	if think != 8000 || only {
+		t.Fatalf("think+tool should not be rumination think=%d only=%v", think, only)
 	}
 }
 

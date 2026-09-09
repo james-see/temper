@@ -42,7 +42,7 @@ type Hermes struct {
 	workspace  string
 	sessionID  string
 	seenIDs    map[string]bool
-	exportSeen int
+	exportCur  exportCursor
 	logSeen    map[string]bool
 	argv       []string
 	started    time.Time
@@ -300,11 +300,11 @@ func (h *Hermes) pollExport(ctx context.Context, id string) ([]Ingest, error) {
 		return nil, err
 	}
 	h.mu.Lock()
-	seen := h.exportSeen
+	cur := h.exportCur
 	h.mu.Unlock()
-	evs, next := parseExportOutput(out, seen)
+	evs, next := parseExportOutput(out, cur)
 	h.mu.Lock()
-	h.exportSeen = next
+	h.exportCur = next
 	h.mu.Unlock()
 	return evs, nil
 }

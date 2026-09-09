@@ -1125,6 +1125,8 @@ func eventHeadline(ev event.Event) string {
 		return asString(d["text"])
 	case event.GoalShifted:
 		return fmt.Sprintf("%s → %s", asString(d["from"]), asString(d["to"]))
+	case event.ModelThinking:
+		return fmt.Sprintf("think  %v", d["chars"])
 	case event.ModelCompleted:
 		if err, ok := d["error"].(string); ok && err != "" {
 			return "error"

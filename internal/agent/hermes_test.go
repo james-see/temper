@@ -53,9 +53,9 @@ func TestParseExportSession(t *testing.T) {
 		{"role":"tool","tool_name":"read_file","content":"def login(): pass"},
 		{"role":"user","content":[{"type":"text","text":"only this"}]}
 	]}`
-	ings, n := parseExportOutput(out, 0)
-	if n != 5 {
-		t.Fatalf("n=%d", n)
+	ings, cur := parseExportOutput(out, exportCursor{})
+	if cur.n != 5 {
+		t.Fatalf("n=%d", cur.n)
 	}
 	var types []string
 	for _, ing := range ings {
@@ -65,9 +65,47 @@ func TestParseExportSession(t *testing.T) {
 	if got != "user.message,tool.requested,model.completed,tool.completed,user.message" {
 		t.Fatal(got)
 	}
-	more, n2 := parseExportOutput(out, n)
-	if n2 != 5 || len(more) != 0 {
-		t.Fatalf("delta %d %d", n2, len(more))
+	failed := `{"role":"tool","tool_name":"terminal","content":"{\"output\":\"boom\",\"exit_code\":1,\"error\":null}"}`
+	ing, ok := parseExportLine(failed)
+	if !ok || ing.Data["error"] != "exit 1" {
+		t.Fatalf("%+v %v", ing, ok)
+	}
+	more, cur2 := parseExportOutput(out, cur)
+	if cur2.n != 5 || len(more) != 0 {
+		t.Fatalf("delta %d %d", cur2.n, len(more))
+	}
+}
+
+func TestParseExportReasoning(t *testing.T) {
+	out := `{"id":"sess","messages":[
+		{"id":1,"role":"assistant","content":"","reasoning":"just thinking","reasoning_content":"just thinking"}
+	]}`
+	ings, cur := parseExportOutput(out, exportCursor{})
+	if cur.n != 1 || len(ings) != 1 || ings[0].Type != "model.thinking" {
+		t.Fatalf("%+v %+v", ings, cur)
+	}
+	if ings[0].Data["chars"] != 13 {
+		t.Fatalf("chars %+v", ings[0].Data)
+	}
+	grown := `{"id":"sess","messages":[
+		{"id":1,"role":"assistant","content":"","reasoning":"just thinking a lot more now"}
+	]}`
+	more, cur2 := parseExportOutput(grown, cur)
+	if len(more) != 1 || more[0].Type != "model.thinking" {
+		t.Fatalf("growth %+v", more)
+	}
+	if more[0].Data["delta"] != len("just thinking a lot more now")-13 {
+		t.Fatalf("delta %+v", more[0].Data)
+	}
+	if cur2.thinkLen != len("just thinking a lot more now") {
+		t.Fatalf("cursor %+v", cur2)
+	}
+	ing := ingestMessage(map[string]any{
+		"role": "assistant", "content": "", "reasoning": "plan then act",
+		"tool_calls": []any{map[string]any{"function": map[string]any{"name": "read_file", "arguments": `{"path":"a"}`}}},
+	})
+	if len(ing) != 2 || ing[0].Type != "model.thinking" || ing[1].Type != "tool.requested" {
+		t.Fatalf("%+v", ing)
 	}
 }
 

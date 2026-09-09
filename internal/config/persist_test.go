@@ -34,8 +34,11 @@ func TestPersistReflexMode(t *testing.T) {
 }
 
 func TestEffectiveModeDefault(t *testing.T) {
-	if (Reflex{}).EffectiveMode() != ReflexHuman {
-		t.Fatal("default human")
+	if (Reflex{}).EffectiveMode() != ReflexAuto {
+		t.Fatal("default auto")
+	}
+	if (Reflex{Mode: "human"}).EffectiveMode() != ReflexHuman {
+		t.Fatal("human")
 	}
 	if (Reflex{Mode: "AUTO"}).EffectiveMode() != ReflexAuto {
 		t.Fatal("auto")

@@ -8,7 +8,11 @@ import (
 	"unicode"
 )
 
-const earlyGrace = 4
+const (
+	earlyGrace      = 4
+	ThinkUncertain  = 2500
+	ThinkStalled    = 6000
+)
 
 type Signals struct {
 	Actions          []string
@@ -23,6 +27,8 @@ type Signals struct {
 	Exploratory      bool
 	StagnationN      int
 	Step             int
+	ThinkChars       int
+	ThinkOnly        bool
 }
 
 type Engine struct {
@@ -69,6 +75,24 @@ func (e *Engine) ObserveError(fp string) {
 	}
 }
 
+func (e *Engine) Reset() {
+	e.actions = nil
+	e.errors = nil
+}
+
+func thinkAssessment(chars int) (Assessment, bool) {
+	if chars >= ThinkStalled {
+		return Assessment{State: Stalled, Score: 0.15, Reasons: []string{"rumination"}}, true
+	}
+	if chars >= ThinkUncertain {
+		span := float64(ThinkStalled - ThinkUncertain)
+		frac := float64(chars-ThinkUncertain) / span
+		score := 0.4 - 0.2*frac
+		return Assessment{State: Uncertain, Score: score, Reasons: []string{"rumination"}}, true
+	}
+	return Assessment{}, false
+}
+
 func (e *Engine) Assess(sig Signals) Assessment {
 	actions := append(append([]string{}, e.actions...), sig.Actions...)
 	errors := append(append([]string{}, e.errors...), sig.Errors...)
@@ -78,6 +102,9 @@ func (e *Engine) Assess(sig Signals) Assessment {
 
 	if n, ok := tailRepeat(actions); ok && n >= e.ActionThresh {
 		return Assessment{State: Looping, Score: 0.1, Reasons: []string{"repeated-action"}}
+	}
+	if periodCycle(actions, 2, e.ActionThresh) && !tailAllExploratory(actions, 4) {
+		return Assessment{State: Looping, Score: 0.1, Reasons: []string{"repeated-cycle"}}
 	}
 	if n, ok := tailRepeat(errors); ok && n >= e.ErrorThresh {
 		return Assessment{State: Looping, Score: 0.1, Reasons: []string{"repeated-error"}}
@@ -90,6 +117,12 @@ func (e *Engine) Assess(sig Signals) Assessment {
 	}
 	if sig.Meaningful {
 		return Assessment{State: Progressing, Score: 0.7, Reasons: []string{"workspace-delta"}}
+	}
+	if sig.ThinkOnly {
+		if a, ok := thinkAssessment(sig.ThinkChars); ok {
+			return a
+		}
+		return Assessment{State: Progressing, Score: 0.5, Reasons: []string{"thinking"}}
 	}
 	if exploratory {
 		return Assessment{State: Progressing, Score: 0.65, Reasons: []string{"exploring"}}
@@ -113,11 +146,11 @@ func (e *Engine) Assess(sig Signals) Assessment {
 
 func IsExploratory(name, args string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "read", "search":
+	case "read", "search", "read_file", "search_files":
 		return true
 	case "git":
 		return gitExplore(args)
-	case "shell":
+	case "shell", "terminal":
 		return shellExplore(args)
 	default:
 		return false
@@ -159,6 +192,10 @@ func shellExplore(args string) bool {
 	}
 	_ = json.Unmarshal([]byte(args), &in)
 	cmd := strings.TrimSpace(in.Command)
+	if cmd == "" {
+		cmd = strings.TrimSpace(args)
+	}
+	cmd = stripWorkingDir(cmd)
 	if i := strings.IndexAny(cmd, "|&;"); i >= 0 {
 		cmd = strings.TrimSpace(cmd[:i])
 	}
@@ -195,7 +232,35 @@ func distinctCount(items []string) int {
 }
 
 func NormalizeAction(name, args string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "read_file", "read", "write_file", "write", "patch":
+		if p := toolField(args, "path"); p != "" {
+			return name + ":" + compact(p)
+		}
+	case "terminal", "shell":
+		if c := toolField(args, "command"); c != "" {
+			return name + ":" + compact(stripWorkingDir(c))
+		}
+	}
 	return name + ":" + compact(args)
+}
+
+func toolField(args, key string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(args), &m) != nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return strings.TrimSpace(s)
+}
+
+func stripWorkingDir(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if i := strings.Index(cmd, "&&"); i >= 0 && strings.HasPrefix(strings.TrimSpace(cmd), "cd ") {
+		return strings.TrimSpace(cmd[i+2:])
+	}
+	return cmd
 }
 
 func FingerprintError(s string) string {
@@ -219,6 +284,43 @@ func compact(s string) string {
 		b.WriteRune(r)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func periodCycle(items []string, period, reps int) bool {
+	if period < 2 || reps < 2 {
+		return false
+	}
+	need := period * reps
+	if len(items) < need {
+		return false
+	}
+	tail := items[len(items)-need:]
+	same := true
+	for i := period; i < need; i++ {
+		if tail[i] != tail[i-period] {
+			return false
+		}
+		if tail[i] != tail[0] {
+			same = false
+		}
+	}
+	return !same
+}
+
+func tailAllExploratory(items []string, n int) bool {
+	if len(items) < n {
+		n = len(items)
+	}
+	if n == 0 {
+		return false
+	}
+	for _, a := range items[len(items)-n:] {
+		name, rest, _ := strings.Cut(a, ":")
+		if !IsExploratory(name, rest) {
+			return false
+		}
+	}
+	return true
 }
 
 func tailRepeat(items []string) (int, bool) {

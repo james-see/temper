@@ -129,8 +129,9 @@ type session struct {
 	phasePrompt int
 	phaseCompl  int
 	pending     *pendingRec
-	approve     chan struct{}
-	mode        string
+	approve    chan struct{}
+	mode       string
+	thinkChars int
 }
 
 type Manager struct {
