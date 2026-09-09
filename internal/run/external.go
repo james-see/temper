@@ -43,19 +43,10 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 	if _, err := h.Start(ctx, agent.TaskRequest{
 		RunID: id, Prompt: opts.Goal, Workspace: ws.Root(),
 	}); err != nil {
-		if opts.SkipSpawn {
-			m.debug("hermes.spawn_skipped", "err", err.Error(), "cmd", h.LaunchLine())
-		} else {
-			m.emit(ctx, event.AgentStarted, "hermes", map[string]any{
-				"id": "hermes", "error": err.Error(), "command": h.LaunchLine(),
-			})
-			// keep going if open-term failed: operator can run the printed command
-			if !strings.Contains(err.Error(), "PATH") && !strings.Contains(err.Error(), "--version") {
-				m.debug("hermes.term", "err", err.Error(), "cmd", h.LaunchLine())
-			} else {
-				return m.fail(ctx, err)
-			}
+		if strings.Contains(err.Error(), "PATH") {
+			return m.fail(ctx, err)
 		}
+		m.debug("hermes.term", "err", err.Error(), "cmd", h.LaunchLine())
 	}
 
 	if err := m.transition(ctx, StatePlanned); err != nil {
@@ -83,7 +74,7 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		opts:    opts,
 		tried:   tried,
 		eng:     eng,
-		ladder:  reflex.NewLadder(recoveryActions(m.Cfg)),
+		ladder:  reflex.NewLadder(sidecarRecovery(m.Cfg)),
 		approve: make(chan struct{}, 1),
 		mode:    m.Cfg.Reflex.EffectiveMode(),
 	}
@@ -97,7 +88,8 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 	eng := s.eng
 	emit := func(typ, actor string, data any) { m.emit(ctx, typ, actor, data) }
 	bound := false
-	idle := 0
+	var lastState reflex.ProgressState
+	var lastReasons string
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 
@@ -106,44 +98,49 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			_ = h.Interrupt(ctx, h.SessionID())
 			return m.cancel(ctx)
 		}
-		if err := m.transition(ctx, StateExecuting); err != nil {
-			return m.rec, err
-		}
-		s.step++
-		m.Hub.set(func(snap *Snapshot) { snap.Step = s.step })
-
-		ings, _ := h.Poll(ctx)
-		var actionNorms []string
-		var errFPs []string
-		for _, ing := range ings {
-			emit(ing.Type, "hermes", ing.Data)
-			switch ing.Type {
-			case event.ToolRequested:
-				tool := fmt.Sprint(ing.Data["tool"])
-				args := fmt.Sprint(ing.Data["args"])
-				actionNorms = append(actionNorms, reflex.NormalizeAction(tool, args))
-			case event.ToolCompleted:
-				if e, _ := ing.Data["error"].(string); e != "" {
-					errFPs = append(errFPs, reflex.FingerprintError(e))
-				}
+		if s.pending == nil {
+			if err := m.ensureState(ctx, StateExecuting); err != nil {
+				return m.rec, err
 			}
 		}
-		if id, ok := h.Discover(ctx); ok && !bound {
-			bound = true
+
+		ings, pollErr := h.Poll(ctx)
+		if pollErr != nil {
+			m.debug("hermes.poll", "err", pollErr.Error())
+		}
+		actionNorms, errFPs, meaningful := sidecarSignals(ings)
+		for _, ing := range ings {
+			emit(ing.Type, "hermes", ing.Data)
+		}
+		if id := h.SessionID(); id != "" {
 			m.Hub.set(func(snap *Snapshot) { snap.SessionID = id; snap.Attach = "session+logs" })
-			emit(event.AgentStarted, "hermes", map[string]any{"id": "hermes", "session": id})
-		} else if id := h.SessionID(); id != "" {
-			m.Hub.set(func(snap *Snapshot) { snap.SessionID = id })
+			if !bound {
+				bound = true
+				emit(event.AgentStarted, "hermes", map[string]any{"id": "hermes", "session": id})
+			}
 		}
 
-		if len(ings) == 0 {
-			idle++
-		} else {
-			idle = 0
-			s.stagnation = 0
+		// Wait for Hermes to come up — do not assess or spam starting events.
+		if !bound && len(ings) == 0 {
+			select {
+			case <-ctx.Done():
+				_ = h.Interrupt(ctx, h.SessionID())
+				return m.cancel(ctx)
+			case <-s.approve:
+				if err := m.applyPending(ctx, emit); err != nil {
+					return m.rec, err
+				}
+			case <-tick.C:
+			}
+			continue
 		}
-		if idle > 0 && len(actionNorms) == 0 && len(errFPs) == 0 {
-			s.stagnation++
+
+		// Sidecar ticks are 1s observations, not agent turns. Empty polls while
+		// the TUI is idle (or the user is typing) are not stagnation.
+		if len(ings) > 0 {
+			s.step++
+			s.stagnation = 0
+			m.Hub.set(func(snap *Snapshot) { snap.Step = s.step })
 		}
 
 		assess := eng.Assess(reflex.Signals{
@@ -153,7 +150,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			TokenBurn:   m.Cfg.Reflex.Detectors.TokenBurn.Threshold,
 			StagnationN: s.stagnation,
 			Step:        s.step,
-			Meaningful:  len(ings) > 0,
+			Meaningful:  meaningful,
 		})
 		for _, n := range actionNorms {
 			eng.ObserveAction(n)
@@ -161,9 +158,14 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		for _, fp := range errFPs {
 			eng.ObserveError(fp)
 		}
-		emit(event.ProgressEvaluated, "reflex", map[string]any{
-			"state": assess.State, "score": assess.Score, "reasons": assess.Reasons,
-		})
+		reasonKey := strings.Join(assess.Reasons, ",")
+		if len(ings) > 0 || assess.State != lastState || reasonKey != lastReasons {
+			emit(event.ProgressEvaluated, "reflex", map[string]any{
+				"state": assess.State, "score": assess.Score, "reasons": assess.Reasons,
+			})
+			lastState = assess.State
+			lastReasons = reasonKey
+		}
 		m.Hub.set(func(snap *Snapshot) {
 			snap.Reflex = assess
 			snap.Progress = assess.Score
@@ -211,6 +213,24 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		case <-tick.C:
 		}
 	}
+}
+
+func sidecarSignals(ings []agent.Ingest) (actions, errors []string, meaningful bool) {
+	for _, ing := range ings {
+		switch ing.Type {
+		case event.ToolRequested:
+			meaningful = true
+			actions = append(actions, reflex.NormalizeAction(fmt.Sprint(ing.Data["tool"]), fmt.Sprint(ing.Data["args"])))
+		case event.ToolCompleted:
+			meaningful = true
+			if e, _ := ing.Data["error"].(string); e != "" {
+				errors = append(errors, reflex.FingerprintError(e))
+			}
+		case event.ModelCompleted:
+			meaningful = true
+		}
+	}
+	return actions, errors, meaningful
 }
 
 func (m *Manager) mode() string {
@@ -282,7 +302,7 @@ func (m *Manager) shouldApplyPending() bool {
 	if m.sess == nil || m.sess.pending == nil {
 		return false
 	}
-	if m.sess.pending.Action == "human" {
+	if m.sess.pending.Action == "human" || m.sess.pending.Held {
 		return false
 	}
 	return m.mode() == config.ReflexAuto
@@ -335,7 +355,20 @@ func (m *Manager) applyPending(ctx context.Context, emit func(string, string, an
 	}
 	if m.sess.hermes != nil {
 		if err := m.sess.hermes.Inject(ctx, prompt); err != nil {
-			emit(event.RecoveryFailed, "hermes", map[string]any{"action": p.Action, "error": err.Error()})
+			p.Held = true
+			p.LastErr = err.Error()
+			kind := "inject"
+			if agent.IsLiveOwner(err) {
+				kind = "live_owner"
+			}
+			emit(event.RecoveryFailed, "hermes", map[string]any{
+				"action": p.Action, "error": err.Error(), "kind": kind,
+			})
+			m.debug("recovery.failed", "action", p.Action, "kind", kind, "err", err.Error())
+			m.Hub.set(func(s *Snapshot) {
+				s.PendingRecovery = p.Action
+				s.PendingReasons = append([]string{kind}, p.Assess.Reasons...)
+			})
 			_ = m.transition(ctx, StateWaitingHuman)
 			return nil
 		}

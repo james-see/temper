@@ -20,10 +20,20 @@ Goal → Plan → Action → Observation → Progress evaluator
 
 ## Install
 
+The easiest way is to use the install script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/james-see/temper/main/install.sh | bash
+```
+
+Alternatively, you can use:
+
 ```bash
 brew tap james-see/tap
 brew install temper
 ```
+
+or
 
 ```bash
 go install github.com/james-see/temper/cmd/temper@latest

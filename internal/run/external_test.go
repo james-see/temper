@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,13 +10,14 @@ import (
 	"github.com/james-see/temper/internal/agent"
 	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/event"
+	"github.com/james-see/temper/internal/term"
 )
 
 func fakeHermes(t *testing.T) *agent.Hermes {
 	t.Helper()
 	h := agent.NewHermes("hermes", false)
 	h.LookPath = func(string) (string, error) { return "/bin/hermes", nil }
-	h.OpenTerm = func([]string, string) error { return nil }
+	h.OpenTerm = func([]string, string) (*term.Handle, error) { return &term.Handle{}, nil }
 	listN := 0
 	h.Exec = func(_ context.Context, _ string, args []string) (string, error) {
 		switch {
@@ -227,6 +229,100 @@ func TestToggleModeAppliesPending(t *testing.T) {
 		t.Fatal("toggle auto")
 	}
 	waitEvent(t, mgr, event.RecoveryCompleted, 3*time.Second)
+	cancel()
+	<-done
+}
+
+func TestExternalLiveOwnerHolds(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Mode = config.ReflexAuto
+	cfg.Reflex.Judge.Model = ""
+	cfg.Reflex.Detectors.ActionCycle.Repetitions = 2
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	h := fakeHermes(t)
+	resumes := 0
+	base := h.Exec
+	h.Exec = func(ctx context.Context, name string, args []string) (string, error) {
+		if contains(args, "--resume") {
+			resumes++
+			return "", fmt.Errorf("%s: exit status 1: Session x already has a live owner (tui, pid 1, running 1m)", name)
+		}
+		return base(ctx, name, args)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = mgr.Execute(ctx, Options{Root: dir, Agent: "hermes", SkipSpawn: true, Hermes: h})
+	}()
+	waitEvent(t, mgr, event.AgentStarted, 3*time.Second)
+	same := `{"command":"echo same"}`
+	h.Queue(
+		agent.Ingest{Type: event.ToolRequested, Data: map[string]any{"tool": "shell", "args": same}},
+		agent.Ingest{Type: event.ToolRequested, Data: map[string]any{"tool": "shell", "args": same}},
+	)
+	waitEvent(t, mgr, event.RecoveryFailed, 4*time.Second)
+	time.Sleep(1200 * time.Millisecond)
+	if resumes != 1 {
+		t.Fatalf("live-owner retries %d want 1", resumes)
+	}
+	if mgr.Hub.Get().PendingRecovery == "" {
+		t.Fatal("expected held pending")
+	}
+	cancel()
+	<-done
+}
+
+func TestSidecarSignals(t *testing.T) {
+	actions, errs, meaningful := sidecarSignals([]agent.Ingest{
+		{Type: event.UserMessage, Data: map[string]any{"text": "hi"}},
+		{Type: event.ToolRequested, Data: map[string]any{"tool": "read_file", "args": "a.go"}},
+	})
+	if !meaningful || len(actions) != 1 || len(errs) != 0 {
+		t.Fatalf("%v %v %v", meaningful, actions, errs)
+	}
+	_, _, meaningful = sidecarSignals([]agent.Ingest{
+		{Type: event.UserMessage, Data: map[string]any{"text": "hi"}},
+	})
+	if meaningful {
+		t.Fatal("user text is not workspace progress")
+	}
+}
+
+func TestExternalIdleDoesNotStall(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Mode = config.ReflexAuto
+	cfg.Reflex.Judge.Model = ""
+	cfg.Reflex.Detectors.Stagnation.Actions = 2
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	h := fakeHermes(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = mgr.Execute(ctx, Options{Root: dir, Agent: "hermes", SkipSpawn: true, Hermes: h})
+	}()
+	waitEvent(t, mgr, event.AgentStarted, 3*time.Second)
+	time.Sleep(1500 * time.Millisecond)
+	for _, ev := range mgr.Hub.Get().Events {
+		if ev.Type == event.StagnationDetected || ev.Type == event.RecoveryStarted {
+			t.Fatalf("idle sidecar fired %s", ev.Type)
+		}
+	}
 	cancel()
 	<-done
 }

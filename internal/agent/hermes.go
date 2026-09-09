@@ -3,11 +3,9 @@ package agent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -19,7 +17,8 @@ import (
 var sessionIDRe = regexp.MustCompile(`(\d{8}_\d{6}_[a-f0-9]+)\s*$`)
 
 type ExecFunc func(ctx context.Context, name string, args []string) (string, error)
-type OpenTermFunc func(argv []string, dir string) error
+type OpenTermFunc func(argv []string, dir string) (*term.Handle, error)
+type TypeTermFunc func(text string) error
 type LookPathFunc func(file string) (string, error)
 
 type Ingest struct {
@@ -33,7 +32,10 @@ type Hermes struct {
 	LookPath LookPathFunc
 	Exec     ExecFunc
 	OpenTerm OpenTermFunc
+	TypeTerm TypeTermFunc
 	Now      func() time.Time
+
+	term *term.Handle
 
 	mu         sync.Mutex
 	bin        string
@@ -45,6 +47,8 @@ type Hermes struct {
 	argv       []string
 	started    time.Time
 	queue      []Ingest
+	snapOnce   sync.Once
+	snapDone   chan struct{}
 }
 
 func NewHermes(command string, spawn bool) *Hermes {
@@ -60,13 +64,14 @@ func NewHermes(command string, spawn bool) *Hermes {
 		Now:      time.Now,
 		seenIDs:  map[string]bool{},
 		logSeen:  map[string]bool{},
+		snapDone: make(chan struct{}),
 	}
 }
 
 func (h *Hermes) ID() string { return "hermes" }
 
 func (h *Hermes) Capabilities(context.Context) (Capabilities, error) {
-	return Capabilities{Streaming: true, ToolCalls: true, Resume: true, Subagents: true, ACP: true, ModelOverride: true}, nil
+	return Capabilities{ToolCalls: true}, nil
 }
 
 func (h *Hermes) Start(_ context.Context, req TaskRequest) (Session, error) {
@@ -83,26 +88,22 @@ func (h *Hermes) Start(_ context.Context, req TaskRequest) (Session, error) {
 	if h.workspace == "" {
 		h.workspace, _ = os.Getwd()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	if _, err := h.run(ctx, bin, "--version"); err != nil {
-		return Session{}, fmt.Errorf("hermes --version: %w", err)
-	}
-	if err := h.snapshotIDs(context.Background()); err != nil {
-		// listing can fail on a fresh install; still launch
-		h.mu.Lock()
-		h.seenIDs = map[string]bool{}
-		h.mu.Unlock()
-	}
+	// Hermes is a slow Python CLI (~10s for --version). Do not block launch on it.
 	h.started = h.now()
 	h.argv = hermesLaunchArgs(h.workspace, req.Prompt)
+	h.beginSnapshot()
 	if h.Spawn {
 		open := h.OpenTerm
 		if open == nil {
 			open = term.Open
 		}
-		if err := open(h.argv, h.workspace); err != nil {
+		handle, err := open(h.argv, h.workspace)
+		if err != nil {
 			return Session{}, err
+		}
+		h.term = handle
+		if h.TypeTerm == nil && handle.CanType() {
+			h.TypeTerm = handle.Type
 		}
 	}
 	return Session{ID: req.RunID}, nil
@@ -119,10 +120,12 @@ func (h *Hermes) LaunchLine() string {
 }
 
 func hermesLaunchArgs(workspace, seed string) []string {
+	// --source is a `hermes chat` flag only. On `hermes --tui` it is parsed as
+	// the positional command, so `--source temper` becomes `invalid choice: temper`.
 	if strings.TrimSpace(seed) != "" {
-		return []string{"hermes", "chat", "--tui", "--in", workspace, "--source", "temper", "-q", seed}
+		return []string{"hermes", "chat", "--tui", "--in", workspace, "-q", seed}
 	}
-	return []string{"hermes", "--tui", "--in", workspace, "--source", "temper"}
+	return []string{"hermes", "--tui", "--in", workspace}
 }
 
 func (h *Hermes) Resume(context.Context, string) (Session, error) {
@@ -147,27 +150,67 @@ func (h *Hermes) Bind(id string) {
 	h.sessionID = id
 }
 
+func (h *Hermes) beginSnapshot() {
+	if h.snapDone == nil {
+		h.snapDone = make(chan struct{})
+	}
+	go func() {
+		defer h.snapOnce.Do(func() { close(h.snapDone) })
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if err := h.snapshotIDs(ctx); err != nil {
+			h.mu.Lock()
+			if h.seenIDs == nil {
+				h.seenIDs = map[string]bool{}
+			}
+			h.mu.Unlock()
+		}
+	}()
+}
+
+func (h *Hermes) waitSnapshot(ctx context.Context) {
+	if h.snapDone == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-h.snapDone:
+	}
+}
+
 func (h *Hermes) Discover(ctx context.Context) (string, bool) {
 	if id := h.SessionID(); id != "" {
 		return id, true
 	}
+	h.waitSnapshot(ctx)
 	rows, err := h.listSessions(ctx)
 	if err != nil {
 		return "", false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, id := range rows {
-		if !h.seenIDs[id] {
-			h.sessionID = id
-			h.seenIDs[id] = true
-			return id, true
-		}
+	id, ok := pickUnseen(rows, h.seenIDs)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	h.sessionID = id
+	h.seenIDs[id] = true
+	return id, true
 }
 
 func (h *Hermes) Inject(ctx context.Context, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("empty recovery prompt")
+	}
+	// Prefer typing into the spawned TUI. hermes chat --resume is refused while
+	// that TUI holds the session lease ("already has a live owner").
+	if h.TypeTerm != nil {
+		return h.TypeTerm(prompt)
+	}
+	if h.term.CanType() {
+		return h.term.Type(prompt)
+	}
 	id := h.SessionID()
 	if id == "" {
 		var ok bool
@@ -178,6 +221,10 @@ func (h *Hermes) Inject(ctx context.Context, prompt string) error {
 	}
 	_, err := h.run(ctx, h.bin, "chat", "--oneshot", "-Q", "--resume", id, "-q", prompt)
 	return err
+}
+
+func IsLiveOwner(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "already has a live owner")
 }
 
 func (h *Hermes) Queue(ings ...Ingest) {
@@ -203,15 +250,20 @@ func (h *Hermes) Poll(ctx context.Context) ([]Ingest, error) {
 	if id == "" {
 		return out, nil
 	}
+	var first error
 	msgs, err := h.pollExport(ctx, id)
-	if err == nil {
+	if err != nil && first == nil {
+		first = err
+	} else {
 		out = append(out, msgs...)
 	}
 	logs, err := h.pollLogs(ctx, id)
-	if err == nil {
+	if err != nil && first == nil {
+		first = err
+	} else {
 		out = append(out, logs...)
 	}
-	return out, nil
+	return out, first
 }
 
 func (h *Hermes) snapshotIDs(ctx context.Context) error {
@@ -231,9 +283,9 @@ func (h *Hermes) snapshotIDs(ctx context.Context) error {
 }
 
 func (h *Hermes) listSessions(ctx context.Context) ([]string, error) {
-	args := []string{"sessions", "list", "--limit", "8"}
+	args := []string{"sessions", "list", "--limit", "20"}
 	if h.workspace != "" {
-		args = append(args, "--workspace", filepath.Base(h.workspace))
+		args = append(args, "--workspace", h.workspace)
 	}
 	out, err := h.run(ctx, h.bin, args...)
 	if err != nil {
@@ -247,20 +299,13 @@ func (h *Hermes) pollExport(ctx context.Context, id string) ([]Ingest, error) {
 	if err != nil {
 		return nil, err
 	}
-	lines := splitNonEmpty(out)
 	h.mu.Lock()
-	start := h.exportSeen
-	if start > len(lines) {
-		start = 0
-	}
-	h.exportSeen = len(lines)
+	seen := h.exportSeen
 	h.mu.Unlock()
-	var evs []Ingest
-	for _, line := range lines[start:] {
-		if ing, ok := parseExportLine(line); ok {
-			evs = append(evs, ing)
-		}
-	}
+	evs, next := parseExportOutput(out, seen)
+	h.mu.Lock()
+	h.exportSeen = next
+	h.mu.Unlock()
 	return evs, nil
 }
 
@@ -279,6 +324,9 @@ func (h *Hermes) pollLogs(ctx context.Context, id string) ([]Ingest, error) {
 		line = strings.TrimSpace(line)
 		if line == "" || h.logSeen[line] {
 			continue
+		}
+		if len(h.logSeen) > 1000 {
+			h.logSeen = map[string]bool{}
 		}
 		h.logSeen[line] = true
 		if ing, ok := classifyLogLine(line); ok {
@@ -336,61 +384,6 @@ func parseSessionIDs(out string) []string {
 		ids = append(ids, m[1])
 	}
 	return ids
-}
-
-func parseExportLine(line string) (Ingest, bool) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return Ingest{}, false
-	}
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(line), &raw); err != nil {
-		return Ingest{}, false
-	}
-	role := strings.ToLower(asString(raw["role"]))
-	if role == "" {
-		role = strings.ToLower(asString(raw["type"]))
-	}
-	text := firstString(raw, "content", "text", "message", "query")
-	if text == "" {
-		if m, ok := raw["message"].(map[string]any); ok {
-			text = firstString(m, "content", "text")
-			if role == "" {
-				role = strings.ToLower(asString(m["role"]))
-			}
-		}
-	}
-	if strings.TrimSpace(text) == "" {
-		return Ingest{}, false
-	}
-	switch role {
-	case "user", "human":
-		return Ingest{Type: "user.message", Data: map[string]any{"text": text}}, true
-	case "assistant", "model", "agent", "ai":
-		return Ingest{Type: "model.completed", Data: map[string]any{"content": text, "tool_calls": 0}}, true
-	default:
-		if strings.Contains(role, "user") {
-			return Ingest{Type: "user.message", Data: map[string]any{"text": text}}, true
-		}
-		return Ingest{Type: "model.completed", Data: map[string]any{"content": text, "tool_calls": 0}}, true
-	}
-}
-
-func classifyLogLine(line string) (Ingest, bool) {
-	low := strings.ToLower(line)
-	if strings.Contains(low, "http request") || strings.Contains(low, "plugin ") {
-		return Ingest{}, false
-	}
-	if strings.Contains(low, "error") || strings.Contains(low, "traceback") {
-		return Ingest{Type: "tool.completed", Data: map[string]any{"tool": "hermes", "error": clip(line, 400)}}, true
-	}
-	if strings.Contains(low, "tool") && (strings.Contains(low, "call") || strings.Contains(low, "run") || strings.Contains(low, "exec")) {
-		return Ingest{Type: "tool.requested", Data: map[string]any{"tool": "hermes", "args": clip(line, 400)}}, true
-	}
-	if strings.Contains(low, "generat") || strings.Contains(low, "completion") || strings.Contains(low, "model") {
-		return Ingest{Type: "model.called", Data: map[string]any{"line": clip(line, 240)}}, true
-	}
-	return Ingest{}, false
 }
 
 func splitNonEmpty(s string) []string {

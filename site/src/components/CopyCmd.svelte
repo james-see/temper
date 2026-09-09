@@ -1,5 +1,5 @@
 <script lang="ts">
-  const cmd = "brew tap james-see/tap && brew install temper";
+  const cmd = "curl -fsSL https://raw.githubusercontent.com/james-see/temper/main/install.sh | bash";
   const go = "go install github.com/james-see/temper/cmd/temper@latest";
   let copied = $state(false);
 
@@ -19,12 +19,15 @@
 <div class="install">
   <button type="button" onclick={copy}>
     <span class="lines">
-      <span><span class="ps">$</span> brew tap james-see/tap</span>
-      <span><span class="ps">$</span> brew install temper</span>
+      <span><span class="ps">$</span> curl -fsSL https://raw.githubusercontent.com/james-see/temper/main/install.sh | bash</span>
     </span>
     <span class="hint">{copied ? "copied" : "copy"}</span>
   </button>
-  <p class="alt">{go}</p>
+  <p class="alt">
+    or:<br>
+    <span class="ps">$</span> brew tap james-see/tap && brew install temper<br>
+    <span class="ps">$</span> go install github.com/james-see/temper/cmd/temper@latest
+  </p>
 </div>
 
 <style>

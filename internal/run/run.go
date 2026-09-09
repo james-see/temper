@@ -104,8 +104,10 @@ type Options struct {
 }
 
 type pendingRec struct {
-	Action string
-	Assess reflex.Assessment
+	Action  string
+	Assess  reflex.Assessment
+	Held    bool
+	LastErr string
 }
 
 type session struct {
@@ -705,6 +707,13 @@ func (m *Manager) transition(ctx context.Context, state string) error {
 	return m.Store.UpdateRun(ctx, m.rec)
 }
 
+func (m *Manager) ensureState(ctx context.Context, state string) error {
+	if m.rec.State == state {
+		return nil
+	}
+	return m.transition(ctx, state)
+}
+
 func (m *Manager) complete(ctx context.Context) (store.Run, error) {
 	m.emit(ctx, event.RunCompleted, "runtime", map[string]any{"state": StateCompleted})
 	_ = m.transition(ctx, StateCompleted)
@@ -744,8 +753,19 @@ func (m *Manager) eventDigest() string {
 }
 
 func recoveryActions(cfg config.Config) []string {
+	return filterRecovery(cfg, false)
+}
+
+func sidecarRecovery(cfg config.Config) []string {
+	return filterRecovery(cfg, true)
+}
+
+func filterRecovery(cfg config.Config, sidecar bool) []string {
 	var out []string
 	for _, s := range cfg.Reflex.Recovery {
+		if sidecar && (s.Action == "switch_model" || s.Action == "switch_agent") {
+			continue
+		}
 		out = append(out, s.Action)
 	}
 	return out

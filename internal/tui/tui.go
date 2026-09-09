@@ -1133,11 +1133,22 @@ func eventHeadline(ev event.Event) string {
 	case event.ProgressEvaluated:
 		return fmt.Sprintf("%v  %v", d["state"], d["reasons"])
 	case event.RecoveryStarted, event.RecoveryCompleted, event.RecoveryFailed:
-		return asString(d["action"])
+		action := asString(d["action"])
+		if ev.Type == event.RecoveryFailed {
+			if k := asString(d["kind"]); k != "" && k != "inject" {
+				return action + "  " + k
+			}
+		}
+		return action
 	case event.AgentStarted:
+		if e := asString(d["error"]); e != "" {
+			return e
+		}
 		if s := asString(d["session"]); s != "" {
 			return s
 		}
+	case event.RunFailed:
+		return asString(d["error"])
 	}
 	return ""
 }
@@ -1160,6 +1171,11 @@ func eventBodyLines(ev event.Event, maxLines, width int) []string {
 			text = err
 		} else {
 			text = asString(d["content"])
+		}
+	case event.RunFailed, event.AgentStarted, event.RecoveryFailed:
+		text = asString(d["error"])
+		if text == "" {
+			text = asString(d["command"])
 		}
 	default:
 		return nil

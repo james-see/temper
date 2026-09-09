@@ -16,6 +16,18 @@ import (
 
 func stripANSI(s string) string { return ansi.Strip(s) }
 
+func TestRunFailedHeadline(t *testing.T) {
+	data, _ := json.Marshal(map[string]any{"error": "hermes --version: signal: killed"})
+	got := eventHeadline(event.Event{Type: event.RunFailed, Data: data})
+	if !strings.Contains(got, "signal: killed") {
+		t.Fatal(got)
+	}
+	body := eventBodyLines(event.Event{Type: event.RunFailed, Data: data}, 5, 80)
+	if len(body) == 0 || !strings.Contains(body[0], "signal: killed") {
+		t.Fatalf("%v", body)
+	}
+}
+
 func TestPrefixCommand(t *testing.T) {
 	if !isPrefixKey("ctrl+b") {
 		t.Fatal("ctrl+b")
