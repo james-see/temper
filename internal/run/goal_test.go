@@ -22,6 +22,10 @@ func TestClassifyTurn(t *testing.T) {
 		{"run a speedtest", "run it again", turnFollowup},
 		{"", "can we run a speedtest", turnNew},
 		{"fix the auth tests", "actually use the fixture instead", turnModify},
+		{"how many open linear tickets do we have assigned to me", "why cant you run that then yourself for me", turnFollowup},
+		{"how many open linear tickets do we have assigned to me", "that has got to be the wrong way to call it. can you try list_issues or similar", turnFollowup},
+		{"how many open linear tickets do we have assigned to me", "this is hermes chat lol", turnFollowup},
+		{"how many open linear tickets do we have assigned to me", "did you check the skills as well?", turnFollowup},
 	}
 	for _, tc := range cases {
 		got := classifyTurn(tc.prev, tc.next)

@@ -26,6 +26,27 @@ func TestResolveApp(t *testing.T) {
 	if ResolveApp() != "iTerm" {
 		t.Fatal(ResolveApp())
 	}
+	// IDE TERM_PROGRAM must not force Apple Terminal when LC_TERMINAL names iTerm.
+	t.Setenv("TERM_PROGRAM", "vscode")
+	t.Setenv("LC_TERMINAL", "iTerm2")
+	if ResolveApp() != "iTerm" {
+		t.Fatal(ResolveApp())
+	}
+	t.Setenv("LC_TERMINAL", "")
+	t.Setenv("TERM_PROGRAM", "ghostty")
+	if ResolveApp() != "Ghostty" {
+		t.Fatal(ResolveApp())
+	}
+}
+
+func TestKnownTerminal(t *testing.T) {
+	app, ok := knownTerminal("iTerm2")
+	if !ok || app != "iTerm" {
+		t.Fatalf("%q %v", app, ok)
+	}
+	if _, ok := knownTerminal("vscode"); ok {
+		t.Fatal("vscode is not a terminal")
+	}
 }
 
 func TestParseTTY(t *testing.T) {

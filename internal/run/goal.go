@@ -48,7 +48,7 @@ func classifyTurn(prev, next string) string {
 		return turnNew
 	}
 	words := strings.Fields(next)
-	if len(words) <= 4 {
+	if len(words) <= 6 && !looksStandaloneTask(next) {
 		return turnFollowup
 	}
 	if overlap < 0.15 {
@@ -166,12 +166,14 @@ var continuePrefixes = []string{
 
 var continuePhrases = []string{
 	"more context", "additional context", "for example", "e g",
+	"can you try", "try calling", "wrong way", "call it",
 }
 
 var followupMarkers = []string{
 	" too", "as well", "again", "the error", "that error",
 	"same thing", "why so", "how come", "that one", "this one",
-	"the same",
+	"the same", "yourself", "why cant", "why can't",
+	"did you check", "list issues", "the tool", "api key",
 }
 
 var askPrefixes = []string{

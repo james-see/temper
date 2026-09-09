@@ -402,6 +402,28 @@ func TestSidecarClassifiesUserTurns(t *testing.T) {
 	<-done
 }
 
+func TestSidecarDiscoveryNoop(t *testing.T) {
+	if !sidecarNoop(agent.Ingest{Type: event.ToolCompleted, Data: map[string]any{
+		"tool": "tool_search", "output": `{"queries":["linear"],"results":[{"matches":[]}]}`,
+	}}) {
+		t.Fatal("empty tool_search")
+	}
+	if !sidecarNoop(agent.Ingest{Type: event.ToolCompleted, Data: map[string]any{
+		"tool": "tool_call", "error": "'mcp__linear__list_issues' is not available in this session",
+		"output": `{"error":"not available"}`,
+	}}) {
+		t.Fatal("missing linear tool")
+	}
+	if !discoveryMiss("oauth error: non-interactive environment and no cached tokens found") {
+		t.Fatal("oauth miss")
+	}
+	if systemNoise("[System: The active model for this chat has changed to glm-5.3-flash]") {
+		// ok
+	} else {
+		t.Fatal("system noise")
+	}
+}
+
 func TestSidecarUserOnly(t *testing.T) {
 	if !sidecarUserOnly([]agent.Ingest{{Type: event.UserMessage, Data: map[string]any{"text": "hi"}}}) {
 		t.Fatal("user only")

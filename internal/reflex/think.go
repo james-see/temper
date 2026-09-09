@@ -21,7 +21,19 @@ var thinkContinue = []string{
 	"i will search",
 	"i'll search again",
 	"let me search again",
+	"let me search",
+	"let me try to call",
+	"try to call",
+	"try calling",
 	"try the same",
+	"not available in this session",
+	"tools aren't",
+	"tools are not",
+	"not being discovered",
+	"call it directly",
+	"correct name",
+	"different name",
+	"not loaded",
 }
 
 var thinkStop = []string{

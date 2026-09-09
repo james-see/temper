@@ -21,7 +21,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.1.11"
+const Version = "0.1.12"
 
 func Execute() {
 	if err := root().Execute(); err != nil {

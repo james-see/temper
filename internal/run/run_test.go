@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/provider"
+	"github.com/james-see/temper/internal/reflex"
 )
 
 func TestExecuteDetectsLoop(t *testing.T) {
@@ -384,6 +386,35 @@ func types(evs []event.Event) string {
 		return t
 	}())
 	return string(b)
+}
+
+func TestRecoveryPromptMCPDiscoveryLoop(t *testing.T) {
+	// A discover:<topic> family means the agent is cycling tool_search/tool_call
+	// on an unconnected MCP server. The recovery prompt must tell the agent to
+	// stop retrying and ask the user to authenticate, not just replan.
+	a := reflex.Assessment{State: reflex.Looping, Reasons: []string{"repeated-action"}, Family: "discover:linear"}
+	got := recoveryPrompt("replan", "fix the bug", a)
+	if !strings.Contains(got, "linear MCP server is not reachable") {
+		t.Fatalf("MCP recovery prompt missing server guidance: %q", got)
+	}
+	if !strings.Contains(got, "hermes mcp login linear") {
+		t.Fatalf("MCP recovery prompt missing login command: %q", got)
+	}
+	if !strings.Contains(got, "stop retrying") {
+		t.Fatalf("MCP recovery prompt missing stop-retry guidance: %q", got)
+	}
+}
+
+func TestRecoveryPromptGenericLoop(t *testing.T) {
+	// A loop without a discover: family gets the generic replan prompt only.
+	a := reflex.Assessment{State: reflex.Looping, Reasons: []string{"repeated-action"}}
+	got := recoveryPrompt("replan", "fix the bug", a)
+	if strings.Contains(got, "MCP server") {
+		t.Fatalf("generic loop prompt should not mention MCP: %q", got)
+	}
+	if !strings.Contains(got, "Reflex looping") {
+		t.Fatalf("generic prompt missing Reflex header: %q", got)
+	}
 }
 
 func initGit(t *testing.T, dir string) {

@@ -114,6 +114,13 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		for i, ing := range ings {
 			if ing.Type == event.UserMessage {
 				text := strings.TrimSpace(fmt.Sprint(ing.Data["text"]))
+				if systemNoise(text) {
+					ing.Data["kind"] = "ack"
+					ing.Data["same_goal"] = true
+					ings[i] = ing
+					emit(ing.Type, "hermes", ing.Data)
+					continue
+				}
 				kind := classifyTurn(s.opts.Goal, text)
 				if ing.Data == nil {
 					ing.Data = map[string]any{}
@@ -124,12 +131,14 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 				if m.adoptUserGoal(ctx, text, kind) {
 					goalShift = true
 				}
-				eng.Reset()
-				s.stagnation = 0
-				s.thinkChars = 0
-				s.step = 0
-				s.phaseCompl = 0
-				s.phasePrompt = 0
+				if kind == turnNew {
+					eng.Reset()
+					s.stagnation = 0
+					s.thinkChars = 0
+					s.step = 0
+					s.phaseCompl = 0
+					s.phasePrompt = 0
+				}
 			}
 			emit(ing.Type, "hermes", ing.Data)
 		}
@@ -352,6 +361,7 @@ func sidecarNoop(ing agent.Ingest) bool {
 	if e, _ := ing.Data["error"].(string); e != "" {
 		return true
 	}
+	tool := strings.ToLower(fmt.Sprint(ing.Data["tool"]))
 	out := strings.ToLower(fmt.Sprint(ing.Data["output"]))
 	if strings.Contains(out, "file unchanged") || strings.Contains(out, `"status": "unchanged"`) {
 		return true
@@ -359,7 +369,42 @@ func sidecarNoop(ing agent.Ingest) bool {
 	if strings.Contains(out, "blocked:") {
 		return true
 	}
+	switch tool {
+	case "tool_search", "tool_describe", "skills_list", "skill_view":
+		return true
+	}
+	if discoveryMiss(out) {
+		return true
+	}
 	return false
+}
+
+func discoveryMiss(out string) bool {
+	if out == "" {
+		return false
+	}
+	for _, p := range []string{
+		"not available in this session",
+		"not a deferrable tool",
+		`"not_found"`,
+		`"matches": []`,
+		`"matches":[]`,
+		"no cached tokens",
+		"non-interactive environment",
+		"failed to connect",
+		"oauth error",
+		"requires an interactive terminal",
+	} {
+		if strings.Contains(out, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func systemNoise(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	return strings.HasPrefix(t, "[system:") || strings.HasPrefix(t, "[important:")
 }
 
 func (m *Manager) mode() string {

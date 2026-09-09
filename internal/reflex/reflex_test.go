@@ -111,6 +111,21 @@ func TestExploreCycleIsNotLoop(t *testing.T) {
 	}
 }
 
+func TestDiscoveryFamilyLoops(t *testing.T) {
+	e := NewEngine(2, 3, 20000, 6, true)
+	a := NormalizeAction("tool_search", `{"queries":["linear"]}`)
+	b := NormalizeAction("tool_call", `{"name":"mcp__linear__list_issues"}`)
+	c := NormalizeAction("terminal", `{"command":"hermes mcp test linear"}`)
+	if a != "discover:linear" || a != b || a != c {
+		t.Fatalf("family %q %q %q", a, b, c)
+	}
+	e.ObserveAction(a)
+	got := e.Assess(Signals{Actions: []string{b}, Meaningful: true, Step: 8})
+	if got.State != Looping || got.Reasons[0] != "repeated-action" {
+		t.Fatalf("want discover loop got %s %v", got.State, got.Reasons)
+	}
+}
+
 func TestNormalizeStripsCDAndPath(t *testing.T) {
 	a := NormalizeAction("terminal", `{"command":"cd /x && go test ./..."}`)
 	b := NormalizeAction("terminal", `{"command":"go test ./..."}`)

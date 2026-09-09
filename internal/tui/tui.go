@@ -821,15 +821,17 @@ func (m Model) viewRun() string {
 	}
 	agentName := nz(snap.Agent, nz(m.agent, "native"))
 	prov := "—"
-	model := "—"
 	if !m.external {
 		prov = nz(nz(snap.Provider, m.provider), "—")
-		model = nz(nz(snap.Model, m.model), "—")
 	} else if snap.SessionID != "" {
 		prov = short(snap.SessionID, 18)
 	}
+	goal := nz(snap.ActiveGoal, snap.Goal)
+	if goal == "" {
+		goal = "—"
+	}
 	header := fmt.Sprintf("TEMPER  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
-		short(snap.RunID, 14), snap.State, agentName, prov, model, paneLabel(m.pane), scrollLabel(m))
+		short(snap.RunID, 14), snap.State, agentName, short(goal, 36), paneLabel(m.pane), scrollLabel(m), nz(prov, "—"))
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")

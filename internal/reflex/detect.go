@@ -104,7 +104,11 @@ func (e *Engine) Assess(sig Signals) Assessment {
 	distinct := distinctCount(actions)
 
 	if n, ok := tailRepeat(actions); ok && n >= e.ActionThresh {
-		return Assessment{State: Looping, Score: 0.1, Reasons: []string{"repeated-action"}}
+		fam := ""
+		if len(actions) > 0 {
+			fam = actions[len(actions)-1]
+		}
+		return Assessment{State: Looping, Score: 0.1, Reasons: []string{"repeated-action"}, Family: fam}
 	}
 	if periodCycle(actions, 2, e.ActionThresh) && !tailAllExploratory(actions, 4) {
 		return Assessment{State: Looping, Score: 0.1, Reasons: []string{"repeated-cycle"}}
@@ -239,6 +243,9 @@ func distinctCount(items []string) int {
 
 func NormalizeAction(name, args string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
+	if fam := discoveryFamily(name, args); fam != "" {
+		return fam
+	}
 	switch name {
 	case "read_file", "read", "write_file", "write", "patch":
 		if p := toolField(args, "path"); p != "" {
@@ -250,6 +257,43 @@ func NormalizeAction(name, args string) string {
 		}
 	}
 	return name + ":" + compact(args)
+}
+
+func discoveryFamily(name, args string) string {
+	blob := strings.ToLower(name + " " + args)
+	topic := discoveryTopic(blob)
+	switch name {
+	case "tool_search", "tool_describe", "tool_call", "skills_list", "skill_view":
+		if topic != "" {
+			return "discover:" + topic
+		}
+		return "discover"
+	case "execute_code":
+		if topic != "" {
+			return "discover:" + topic
+		}
+	case "terminal", "shell":
+		if strings.Contains(blob, "hermes mcp") || strings.Contains(blob, "hermes tools") ||
+			strings.Contains(blob, "hermes auth") || strings.Contains(blob, "hermes login") {
+			if topic != "" {
+				return "discover:" + topic
+			}
+			return "discover:mcp"
+		}
+	}
+	return ""
+}
+
+func discoveryTopic(blob string) string {
+	for _, t := range []string{"linear", "blender", "github", "slack"} {
+		if strings.Contains(blob, t) {
+			return t
+		}
+	}
+	if strings.Contains(blob, "mcp") {
+		return "mcp"
+	}
+	return ""
 }
 
 func toolField(args, key string) string {

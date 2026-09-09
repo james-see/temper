@@ -354,6 +354,9 @@ func (m *Manager) adoptUserGoal(ctx context.Context, text, kind string) bool {
 		m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))
 	}
 	m.Hub.set(func(s *Snapshot) {
+		if s.Goal == "" {
+			s.Goal = text
+		}
 		s.ActiveGoal = text
 		s.Reflex = reflex.Assessment{}
 		s.RecoveryRung = ""
@@ -814,8 +817,21 @@ func filterRecovery(cfg config.Config, sidecar bool) []string {
 }
 
 func recoveryPrompt(action, goal string, a reflex.Assessment) string {
-	return fmt.Sprintf("Reflex %s (%s). Reasons: %s. Action: %s. Re-anchor on goal: %s",
+	prompt := fmt.Sprintf("Reflex %s (%s). Reasons: %s. Action: %s. Re-anchor on goal: %s",
 		a.State, strings.Join(a.Reasons, ", "), strings.Join(a.Reasons, ", "), action, goal)
+	// MCP tool-discovery loops (tool_search/tool_call cycling on an
+	// unconnected server) need auth guidance, not a generic replan nudge —
+	// retrying discovery cannot fix a missing OAuth token or stale session.
+	if strings.HasPrefix(a.Family, "discover:") {
+		topic := strings.TrimPrefix(a.Family, "discover:")
+		prompt += fmt.Sprintf(
+			" The %s MCP server is not reachable in this session — stop retrying "+
+				"tool_search/tool_call for it. Ask the user to run "+
+				"`hermes mcp login %s` (to authenticate) and restart the session "+
+				"(or run /reload-mcp) so the %s tools load, then continue.",
+			topic, topic, topic)
+	}
+	return prompt
 }
 
 func costOf(worker, judge int) float64 {
