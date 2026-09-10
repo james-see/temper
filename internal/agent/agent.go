@@ -19,6 +19,7 @@ type TaskRequest struct {
 	Prompt    string
 	Workspace string
 	Model     string
+	Session   string
 }
 
 type Session struct {
@@ -37,4 +38,14 @@ type Agent interface {
 	Resume(context.Context, string) (Session, error)
 	Interrupt(context.Context, string) error
 	Events(context.Context, string) (<-chan Event, error)
+}
+
+// Sidecar is an external harness Temper polls and steers.
+// Hermes and Cursor both implement this.
+type Sidecar interface {
+	Agent
+	Poll(ctx context.Context) ([]Ingest, error)
+	Inject(ctx context.Context, prompt string) error
+	SessionID() string
+	LaunchLine() string
 }

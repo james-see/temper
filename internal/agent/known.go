@@ -37,7 +37,7 @@ func TypeOf(id string) string {
 
 func Implemented(id string) bool {
 	switch TypeOf(id) {
-	case "temper", "hermes":
+	case "temper", "hermes", "cursor":
 		return true
 	default:
 		return false

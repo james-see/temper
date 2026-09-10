@@ -21,7 +21,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.1.12"
+const Version = "0.1.13"
 
 func Execute() {
 	if err := root().Execute(); err != nil {
@@ -38,6 +38,7 @@ func root() *cobra.Command {
 		agent   string
 		prov    string
 		model   string
+		session string
 	)
 	cmd := &cobra.Command{
 		Use:           "temper",
@@ -47,7 +48,7 @@ func root() *cobra.Command {
 		Args:          cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), args, config.Flags{
-				Plain: plain, Debug: debug, Config: cfgPath, Agent: agent, Provider: prov, Model: model,
+				Plain: plain, Debug: debug, Config: cfgPath, Agent: agent, Provider: prov, Model: model, Session: session,
 			})
 		},
 	}
@@ -57,29 +58,30 @@ func root() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&agent, "agent", "", "agent id")
 	cmd.PersistentFlags().StringVar(&prov, "provider", "", "provider id")
 	cmd.PersistentFlags().StringVar(&model, "model", "", "model id")
+	cmd.PersistentFlags().StringVar(&session, "session", "", "attach a harness session id, or all")
 
-	cmd.AddCommand(runCmd(&plain, &debug, &cfgPath, &agent, &prov, &model))
-	cmd.AddCommand(debugCmd(&plain, &debug, &cfgPath, &agent, &prov, &model))
+	cmd.AddCommand(runCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session))
+	cmd.AddCommand(debugCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session))
 	cmd.AddCommand(inspectCmd(&plain, &cfgPath))
 	cmd.AddCommand(configCmd(&cfgPath))
 	cmd.AddCommand(versionCmd())
 	return cmd
 }
 
-func runCmd(plain, debug *bool, cfgPath, agent, prov, model *string) *cobra.Command {
+func runCmd(plain, debug *bool, cfgPath, agent, prov, model, session *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run [goal]",
 		Short: "Execute a supervised coding run",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), args, config.Flags{
-				Plain: *plain, Debug: *debug, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model,
+				Plain: *plain, Debug: *debug, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model, Session: *session,
 			})
 		},
 	}
 }
 
-func debugCmd(plain, debug *bool, cfgPath, agent, prov, model *string) *cobra.Command {
+func debugCmd(plain, debug *bool, cfgPath, agent, prov, model, session *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "debug [goal]",
 		Short: "Same as temper, with verbose debug logging",
@@ -87,7 +89,7 @@ func debugCmd(plain, debug *bool, cfgPath, agent, prov, model *string) *cobra.Co
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), args, config.Flags{
-				Plain: *plain, Debug: true, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model,
+				Plain: *plain, Debug: true, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model, Session: *session,
 			})
 		},
 	}
@@ -232,13 +234,23 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 
 	if plain {
 		if agent.IsExternal(flags.Agent) {
-			fmt.Fprintf(os.Stdout, "open a terminal and run:\n  hermes --tui --in %s --source temper\n", root)
-			if strings.TrimSpace(goal) != "" {
-				fmt.Fprintf(os.Stdout, "  (seed) hermes chat --tui --in %s --source temper -q %q\n", root, goal)
+			switch agent.TypeOf(flags.Agent) {
+			case "cursor":
+				fmt.Fprintf(os.Stdout, "watching Cursor IDE transcripts for %s via cursor-connect (unofficial; not affiliated with Cursor)\n", root)
+				if strings.TrimSpace(goal) != "" {
+					fmt.Fprintf(os.Stdout, "  inject (turn boundary / stop hook): %q\n", goal)
+				}
+			default:
+				fmt.Fprintf(os.Stdout, "open a terminal and run:\n  hermes --tui --in %s --source temper\n", root)
+				if strings.TrimSpace(goal) != "" {
+					fmt.Fprintf(os.Stdout, "  (seed) hermes chat --tui --in %s --source temper -q %q\n", root, goal)
+				}
 			}
 			go printLive(runCtx, mgr)
+			_, sess, all := parseCursorSession(flags.Session)
 			_, err := mgr.Execute(runCtx, run.Options{
 				Goal: goal, Root: root, Agent: flags.Agent, Plain: true, SkipSpawn: true,
+				CursorSession: sess, CursorAttachAll: all,
 			})
 			return err
 		}
@@ -268,15 +280,19 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		return err
 	}
 
-	start := func(g, prov, model string) {
+	start := func(g, prov, model, cursorWS, cursorSess string) {
+		_, sess, all := parseCursorSession(cursorSess)
 		go func() {
 			_, _ = mgr.Execute(runCtx, run.Options{
-				Goal:     g,
-				Root:     root,
-				Agent:    flags.Agent,
-				Provider: prov,
-				Model:    model,
-				Plain:    false,
+				Goal:            g,
+				Root:            root,
+				Agent:           flags.Agent,
+				Provider:        prov,
+				Model:           model,
+				Plain:           false,
+				CursorWorkspace: cursorWS,
+				CursorSession:   sess,
+				CursorAttachAll: all,
 			})
 		}()
 	}
@@ -286,6 +302,11 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		}()
 	}
 
+	_, sess, all := parseCursorSession(flags.Session)
+	cursorSess := sess
+	if all {
+		cursorSess = "*"
+	}
 	return tui.Run(tui.Options{
 		Goal:       goal,
 		Agent:      flags.Agent,
@@ -299,7 +320,20 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		OnApprove:  mgr.ApproveRecovery,
 		Catalog:    catalog,
 		ListModels: listModels,
+		ListCursor: agent.LiveCursorPicks,
+		CursorSess: cursorSess,
 	})
+}
+
+func parseCursorSession(raw string) (workspace, session string, all bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", "", false
+	}
+	if s == "*" || strings.EqualFold(s, "all") {
+		return "", "", true
+	}
+	return "", s, false
 }
 
 func printDiscovery(w io.Writer, st provider.Status) {

@@ -69,6 +69,8 @@ type Snapshot struct {
 	PendingReasons   []string
 	SessionID        string
 	Attach           string
+	Sessions         []BoundSession
+	FocusSession     string
 }
 
 type Hub struct {
@@ -81,6 +83,7 @@ func (h *Hub) Get() Snapshot {
 	defer h.mu.RUnlock()
 	s := h.snap
 	s.Events = append([]event.Event(nil), h.snap.Events...)
+	s.Sessions = append([]BoundSession(nil), h.snap.Sessions...)
 	return s
 }
 
@@ -91,16 +94,21 @@ func (h *Hub) set(fn func(*Snapshot)) {
 }
 
 type Options struct {
-	Goal      string
-	Root      string
-	Agent     string
-	Provider  string
-	Model     string
-	Plain     bool
-	Prov      provider.Provider
-	MaxSteps  int
-	SkipSpawn bool
-	Hermes    *agent.Hermes
+	Goal            string
+	Root            string
+	Agent           string
+	Provider        string
+	Model           string
+	Plain           bool
+	Prov            provider.Provider
+	MaxSteps        int
+	SkipSpawn       bool
+	Hermes          *agent.Hermes
+	Sidecar         agent.Sidecar
+	CursorWorkspace string
+	CursorSession   string
+	CursorAttachAll bool
+	CursorTargets   []agent.CursorPick
 }
 
 type pendingRec struct {
@@ -112,7 +120,7 @@ type pendingRec struct {
 
 type session struct {
 	native      *agent.Native
-	hermes      *agent.Hermes
+	sidecar     agent.Sidecar
 	ws          *workspace.Manager
 	opts        Options
 	tried       map[string]bool
@@ -129,9 +137,9 @@ type session struct {
 	phasePrompt int
 	phaseCompl  int
 	pending     *pendingRec
-	approve    chan struct{}
-	mode       string
-	thinkChars int
+	approve     chan struct{}
+	mode        string
+	thinkChars  int
 }
 
 type Manager struct {
@@ -273,6 +281,15 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	}
 	emit(event.PlanCreated, "native", map[string]any{"plan": "execute goal with workspace tools"})
 	emit(event.AgentStarted, "native", map[string]any{"id": "native"})
+	m.Hub.set(func(s *Snapshot) {
+		s.Sessions = []BoundSession{{
+			Agent: "native", Session: id, Workspace: ws.Root(),
+			Label: filepath.Base(ws.Root()), Attach: "worktree", Focus: true,
+		}}
+		s.FocusSession = id
+		s.SessionID = id
+		s.Attach = "worktree"
+	})
 
 	eng := reflex.NewEngine(
 		m.Cfg.Reflex.Detectors.ActionCycle.Repetitions,
@@ -348,7 +365,7 @@ func (m *Manager) adoptUserGoal(ctx context.Context, text, kind string) bool {
 	m.sess.opts.Goal = text
 	m.sess.prevPass = nil
 	m.sess.pending = nil
-	if m.sess.hermes != nil {
+	if m.sess.sidecar != nil {
 		m.sess.ladder = reflex.NewLadder(sidecarRecovery(m.Cfg))
 	} else {
 		m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))

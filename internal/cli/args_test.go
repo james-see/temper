@@ -33,4 +33,23 @@ func TestSplitAgentArgs(t *testing.T) {
 	if err != nil || id != "hermes" || goal != "still a goal" {
 		t.Fatalf("flag %s %q %v", id, goal, err)
 	}
+	id, goal, err = splitAgentArgs([]string{"cursor", "watch", "this"}, cfg, "")
+	if err != nil || id != "cursor" || goal != "watch this" {
+		t.Fatalf("cursor %s %q %v", id, goal, err)
+	}
+}
+
+func TestParseCursorSession(t *testing.T) {
+	_, sess, all := parseCursorSession("all")
+	if sess != "" || !all {
+		t.Fatalf("%q %v", sess, all)
+	}
+	_, sess, all = parseCursorSession("*")
+	if sess != "" || !all {
+		t.Fatalf("star %q %v", sess, all)
+	}
+	_, sess, all = parseCursorSession("abc-123")
+	if sess != "abc-123" || all {
+		t.Fatalf("id %q %v", sess, all)
+	}
 }

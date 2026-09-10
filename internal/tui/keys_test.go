@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/james-see/temper/internal/agent"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/run"
 )
@@ -35,6 +36,10 @@ func TestPrefixCommand(t *testing.T) {
 	cmd, ok := prefixCommand("s")
 	if !ok || cmd != "status" {
 		t.Fatalf("%s %v", cmd, ok)
+	}
+	cmd, ok = prefixCommand("w")
+	if !ok || cmd != "sessions" {
+		t.Fatalf("w %s %v", cmd, ok)
 	}
 	if !typingPhase(phaseInput) {
 		t.Fatal("input is typing")
@@ -78,6 +83,11 @@ func TestTabTogglesPane(t *testing.T) {
 	got := next.(Model)
 	if got.pane != paneIO {
 		t.Fatal("tab -> io")
+	}
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	got = next.(Model)
+	if got.pane != paneSessions {
+		t.Fatal("tab -> sessions")
 	}
 	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyTab})
 	got = next.(Model)
@@ -284,10 +294,10 @@ func TestExternalSkipsPickers(t *testing.T) {
 	started := false
 	m := New(Options{
 		Agent: "hermes",
-		OnStart: func(goal, provider, model string) {
+		OnStart: func(goal, provider, model, cursorWS, cursorSess string) {
 			started = true
-			if goal != "" || provider != "" || model != "" {
-				t.Fatalf("sidecar start %q %q %q", goal, provider, model)
+			if goal != "" || provider != "" || model != "" || cursorWS != "" || cursorSess != "" {
+				t.Fatalf("sidecar start %q %q %q %q %q", goal, provider, model, cursorWS, cursorSess)
 			}
 		},
 	})
@@ -337,5 +347,94 @@ func TestPickerJK(t *testing.T) {
 	got := next.(Model)
 	if got.cursor != 1 {
 		t.Fatalf("cursor %d", got.cursor)
+	}
+}
+
+func TestCursorAutoAttachesOne(t *testing.T) {
+	var gotWS, gotSess string
+	m := New(Options{
+		Agent: "cursor",
+		OnStart: func(_, _, _, ws, sess string) {
+			gotWS, gotSess = ws, sess
+		},
+	})
+	next, _ := m.Update(cursorSessionsMsg{Picks: []agent.CursorPick{{
+		SessionID: "abc", Workspace: "/Users/jc/p/temper", Label: "temper",
+	}}})
+	got := next.(Model)
+	if got.phase != phaseRunning {
+		t.Fatalf("phase %d", got.phase)
+	}
+	if gotSess != "abc" || gotWS != "/Users/jc/p/temper" {
+		t.Fatalf("attached %q %q", gotWS, gotSess)
+	}
+}
+
+func TestCursorPickerAttachAll(t *testing.T) {
+	var gotSess string
+	m := New(Options{
+		Agent:   "cursor",
+		OnStart: func(_, _, _, _, sess string) { gotSess = sess },
+	})
+	next, _ := m.Update(cursorSessionsMsg{Picks: []agent.CursorPick{
+		{SessionID: "a", Workspace: "/t", Label: "temper"},
+		{SessionID: "b", Workspace: "/v", Label: "vala"},
+	}})
+	got := next.(Model)
+	if got.phase != phasePickSession {
+		t.Fatalf("phase %d", got.phase)
+	}
+	if len(got.items) != 3 || got.items[0].ID != attachAllID {
+		t.Fatalf("items %+v", got.items)
+	}
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(Model)
+	if got.phase != phaseRunning || gotSess != "*" {
+		t.Fatalf("phase %d sess %q", got.phase, gotSess)
+	}
+}
+
+func TestCursorPickerDigitSelects(t *testing.T) {
+	var gotSess, gotWS string
+	m := New(Options{
+		Agent:   "cursor",
+		OnStart: func(_, _, _, ws, sess string) { gotWS, gotSess = ws, sess },
+	})
+	next, _ := m.Update(cursorSessionsMsg{Picks: []agent.CursorPick{
+		{SessionID: "a", Workspace: "/t", Label: "temper"},
+		{SessionID: "b", Workspace: "/v", Label: "vala"},
+	}})
+	got := next.(Model)
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	got = next.(Model)
+	if gotSess != "a" || gotWS != "/t" {
+		t.Fatalf("digit 2 -> %q %q", gotWS, gotSess)
+	}
+}
+
+func TestPrefixWSessionsPane(t *testing.T) {
+	m := New(Options{})
+	m.phase = phaseRunning
+	m.ready = true
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	got := next.(Model)
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	got = next.(Model)
+	if got.pane != paneSessions {
+		t.Fatal("ctrl+b w -> sessions")
+	}
+}
+
+func TestRenderSessions(t *testing.T) {
+	s := renderSessions(run.Snapshot{
+		FocusSession: "b",
+		Sessions: []run.BoundSession{
+			{Agent: "cursor", Session: "a", Label: "temper", Preview: "fix tests", Attach: "ide-transcripts", Workspace: "/t"},
+			{Agent: "hermes", Session: "b", Label: "vala", Attach: "session+logs", Workspace: "/v", Focus: true},
+		},
+	}, 80)
+	plain := stripANSI(s)
+	if !strings.Contains(plain, "2 connected") || !strings.Contains(plain, "temper") || !strings.Contains(plain, "hermes") {
+		t.Fatal(plain)
 	}
 }

@@ -424,6 +424,53 @@ func TestSidecarDiscoveryNoop(t *testing.T) {
 	}
 }
 
+func TestResolveCursorTargets(t *testing.T) {
+	got, err := resolveCursorTargets(Options{CursorTargets: []agent.CursorPick{{SessionID: "a", Workspace: "/t"}}})
+	if err != nil || len(got) != 1 || got[0].SessionID != "a" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	got, err = resolveCursorTargets(Options{CursorSession: "abc", CursorWorkspace: "/y"})
+	if err != nil || len(got) != 1 || got[0].Workspace != "/y" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	got, err = resolveCursorTargets(Options{})
+	if err != nil || got != nil {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestDescribeSidecarsMux(t *testing.T) {
+	a := &stubBound{id: "cursor", session: "aaa", ws: "/t"}
+	b := &stubBound{id: "hermes", session: "bbb", ws: "/v"}
+	list := describeSidecars(agent.NewMux("control", []agent.Sidecar{a, b}), "mixed")
+	if len(list) != 2 || list[0].Session != "aaa" || list[1].Agent != "hermes" || !list[0].Focus || list[1].Focus {
+		t.Fatalf("%+v", list)
+	}
+}
+
+type stubBound struct {
+	id, session, ws string
+}
+
+func (s *stubBound) ID() string { return s.id }
+func (s *stubBound) Capabilities(context.Context) (agent.Capabilities, error) {
+	return agent.Capabilities{}, nil
+}
+func (s *stubBound) Start(context.Context, agent.TaskRequest) (agent.Session, error) {
+	return agent.Session{ID: s.session}, nil
+}
+func (s *stubBound) Resume(context.Context, string) (agent.Session, error) {
+	return agent.Session{ID: s.session}, nil
+}
+func (s *stubBound) Interrupt(context.Context, string) error { return nil }
+func (s *stubBound) Events(context.Context, string) (<-chan agent.Event, error) {
+	return nil, nil
+}
+func (s *stubBound) Poll(context.Context) ([]agent.Ingest, error) { return nil, nil }
+func (s *stubBound) Inject(context.Context, string) error         { return nil }
+func (s *stubBound) SessionID() string                            { return s.session }
+func (s *stubBound) LaunchLine() string                           { return s.id }
+
 func TestSidecarUserOnly(t *testing.T) {
 	if !sidecarUserOnly([]agent.Ingest{{Type: event.UserMessage, Data: map[string]any{"text": "hi"}}}) {
 		t.Fatal("user only")

@@ -28,39 +28,44 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		s.JudgeOn = m.Cfg.Reflex.Judge.EffectiveEnabled()
 	})
 
-	h := opts.Hermes
-	if h == nil {
-		cmd := "hermes"
-		if a, ok := m.Cfg.Agents[dec.Selected.Agent]; ok && a.Command != "" {
-			cmd = a.Command
-		} else if a, ok := m.Cfg.Agents["hermes"]; ok && a.Command != "" {
-			cmd = a.Command
-		}
-		h = agent.NewHermes(cmd, !opts.SkipSpawn)
-	} else if opts.SkipSpawn {
-		h.Spawn = false
+	side, attach, err := m.openSidecar(opts, dec)
+	if err != nil {
+		return m.fail(ctx, err)
 	}
+	m.Hub.set(func(s *Snapshot) { s.Attach = attach })
 
-	if _, err := h.Start(ctx, agent.TaskRequest{
-		RunID: id, Prompt: opts.Goal, Workspace: ws.Root(),
+	reqWS := ws.Root()
+	if opts.CursorWorkspace != "" {
+		reqWS = opts.CursorWorkspace
+	}
+	if side.SessionID() != "" {
+		if p := strings.TrimSpace(opts.Goal); p != "" {
+			if err := side.Inject(ctx, p); err != nil && !agent.IsInjectUnavailable(err) {
+				return m.fail(ctx, err)
+			}
+		}
+	} else if _, err := side.Start(ctx, agent.TaskRequest{
+		RunID: id, Prompt: opts.Goal, Workspace: reqWS, Session: opts.CursorSession,
 	}); err != nil {
-		if strings.Contains(err.Error(), "PATH") {
+		if side.ID() == "hermes" && !strings.Contains(err.Error(), "PATH") {
+			m.debug("sidecar.start", "err", err.Error(), "cmd", side.LaunchLine(), "id", side.ID())
+		} else {
 			return m.fail(ctx, err)
 		}
-		m.debug("hermes.term", "err", err.Error(), "cmd", h.LaunchLine())
 	}
 
 	if err := m.transition(ctx, StatePlanned); err != nil {
 		return m.rec, err
 	}
 	emit := func(typ, actor string, data any) { m.emit(ctx, typ, actor, data) }
-	emit(event.PlanCreated, "hermes", map[string]any{"plan": "sidecar control plane"})
-	emit(event.AgentStarted, "hermes", map[string]any{
-		"id": "hermes", "command": h.LaunchLine(), "spawn": !opts.SkipSpawn,
+	emit(event.PlanCreated, side.ID(), map[string]any{"plan": "sidecar control plane"})
+	emit(event.AgentStarted, side.ID(), map[string]any{
+		"id": side.ID(), "command": side.LaunchLine(), "spawn": !opts.SkipSpawn, "attach": attach,
 	})
 	if opts.SkipSpawn {
-		m.debug("hermes.plain", "cmd", h.LaunchLine())
+		m.debug("sidecar.plain", "cmd", side.LaunchLine(), "id", side.ID())
 	}
+	m.publishSessions(side, attach)
 
 	eng := reflex.NewEngine(
 		m.Cfg.Reflex.Detectors.ActionCycle.Repetitions,
@@ -70,7 +75,7 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
 	m.sess = &session{
-		hermes:  h,
+		sidecar: side,
 		ws:      ws,
 		opts:    opts,
 		tried:   tried,
@@ -79,13 +84,93 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		approve: make(chan struct{}, 1),
 		mode:    m.Cfg.Reflex.EffectiveMode(),
 	}
-	m.debug("routing", "agent", m.rec.Agent, "sidecar", true, "spawn", !opts.SkipSpawn)
+	m.debug("routing", "agent", m.rec.Agent, "sidecar", true, "spawn", !opts.SkipSpawn, "attach", attach)
 	return m.driveExternal(ctx)
+}
+
+func (m *Manager) openSidecar(opts Options, dec arbiter.Decision) (agent.Sidecar, string, error) {
+	if opts.Sidecar != nil {
+		return opts.Sidecar, attachMode(opts.Sidecar.ID()), nil
+	}
+	if opts.Hermes != nil {
+		if opts.SkipSpawn {
+			opts.Hermes.Spawn = false
+		}
+		return opts.Hermes, "session+logs", nil
+	}
+	typ := agent.TypeOf(dec.Selected.Agent)
+	switch typ {
+	case "hermes":
+		cmd := "hermes"
+		if a, ok := m.Cfg.Agents[dec.Selected.Agent]; ok && a.Command != "" {
+			cmd = a.Command
+		} else if a, ok := m.Cfg.Agents["hermes"]; ok && a.Command != "" {
+			cmd = a.Command
+		}
+		return agent.NewHermes(cmd, !opts.SkipSpawn), "session+logs", nil
+	case "cursor":
+		return m.openCursor(opts)
+	default:
+		return nil, "", agent.UnimplementedError(dec.Selected.Agent)
+	}
+}
+
+func (m *Manager) openCursor(opts Options) (agent.Sidecar, string, error) {
+	targets, err := resolveCursorTargets(opts)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(targets) == 0 {
+		return agent.NewCursor(), "ide-transcripts", nil
+	}
+	var items []agent.Sidecar
+	for _, t := range targets {
+		c := agent.NewCursor()
+		if _, err := c.Start(context.Background(), agent.TaskRequest{
+			Workspace: t.Workspace, Session: t.SessionID,
+		}); err != nil {
+			return nil, "", err
+		}
+		items = append(items, c)
+	}
+	if len(items) == 1 {
+		return items[0], "ide-transcripts", nil
+	}
+	return agent.NewMux("cursor", items), "ide-transcripts", nil
+}
+
+func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
+	if len(opts.CursorTargets) > 0 {
+		return opts.CursorTargets, nil
+	}
+	sess := strings.TrimSpace(opts.CursorSession)
+	all := opts.CursorAttachAll || sess == "*" || strings.EqualFold(sess, "all")
+	if all {
+		return agent.LiveCursorPicks()
+	}
+	if sess != "" {
+		if opts.CursorWorkspace != "" {
+			return []agent.CursorPick{{SessionID: sess, Workspace: opts.CursorWorkspace}}, nil
+		}
+		p, err := agent.ResolveCursorPick(sess)
+		if err != nil {
+			return nil, err
+		}
+		return []agent.CursorPick{p}, nil
+	}
+	return nil, nil
+}
+
+func attachMode(id string) string {
+	if id == "cursor" {
+		return "ide-transcripts"
+	}
+	return "session+logs"
 }
 
 func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 	s := m.sess
-	h := s.hermes
+	h := s.sidecar
 	eng := s.eng
 	emit := func(typ, actor string, data any) { m.emit(ctx, typ, actor, data) }
 	bound := false
@@ -107,7 +192,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 
 		ings, pollErr := h.Poll(ctx)
 		if pollErr != nil {
-			m.debug("hermes.poll", "err", pollErr.Error())
+			m.debug("sidecar.poll", "err", pollErr.Error(), "id", h.ID())
 		}
 		userOnly := sidecarUserOnly(ings)
 		goalShift := false
@@ -118,7 +203,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 					ing.Data["kind"] = "ack"
 					ing.Data["same_goal"] = true
 					ings[i] = ing
-					emit(ing.Type, "hermes", ing.Data)
+					emit(ing.Type, h.ID(), ing.Data)
 					continue
 				}
 				kind := classifyTurn(s.opts.Goal, text)
@@ -140,7 +225,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 					s.phasePrompt = 0
 				}
 			}
-			emit(ing.Type, "hermes", ing.Data)
+			emit(ing.Type, h.ID(), ing.Data)
 		}
 		if goalShift {
 			lastState = ""
@@ -150,10 +235,10 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		s.thinkChars += thinkDelta
 		thinkOnly := s.thinkChars > 0 && len(actionNorms) == 0 && !meaningful
 		if id := h.SessionID(); id != "" {
-			m.Hub.set(func(snap *Snapshot) { snap.SessionID = id; snap.Attach = "session+logs" })
+			m.publishSessions(h, attachMode(h.ID()))
 			if !bound {
 				bound = true
-				emit(event.AgentStarted, "hermes", map[string]any{"id": "hermes", "session": id})
+				emit(event.AgentStarted, h.ID(), map[string]any{"id": h.ID(), "session": id})
 			}
 		}
 
@@ -527,15 +612,18 @@ func (m *Manager) applyPending(ctx context.Context, emit func(string, string, an
 		m.clearPending()
 		return nil
 	}
-	if m.sess.hermes != nil {
-		if err := m.sess.hermes.Inject(ctx, prompt); err != nil {
+	if m.sess.sidecar != nil {
+		if err := m.sess.sidecar.Inject(ctx, prompt); err != nil {
 			p.Held = true
 			p.LastErr = err.Error()
 			kind := "inject"
 			if agent.IsLiveOwner(err) {
 				kind = "live_owner"
 			}
-			emit(event.RecoveryFailed, "hermes", map[string]any{
+			if agent.IsInjectUnavailable(err) {
+				kind = "inject_unavailable"
+			}
+			emit(event.RecoveryFailed, m.sess.sidecar.ID(), map[string]any{
 				"action": p.Action, "error": err.Error(), "kind": kind,
 			})
 			m.debug("recovery.failed", "action", p.Action, "kind", kind, "err", err.Error())

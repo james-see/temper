@@ -32,6 +32,8 @@ func prefixCommand(s string) (string, bool) {
 		return "log", true
 	case "t":
 		return "io", true
+	case "w":
+		return "sessions", true
 	case "tab":
 		return "pane", true
 	case "esc":
@@ -46,5 +48,5 @@ func typingPhase(p phase) bool {
 }
 
 func pickerPhase(p phase) bool {
-	return p == phasePickProvider || p == phasePickModel
+	return p == phasePickProvider || p == phasePickModel || p == phasePickSession
 }

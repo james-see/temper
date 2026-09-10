@@ -144,6 +144,12 @@ func (h *Hermes) SessionID() string {
 	return h.sessionID
 }
 
+func (h *Hermes) Workspace() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.workspace
+}
+
 func (h *Hermes) Bind(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

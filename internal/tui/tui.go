@@ -24,6 +24,7 @@ const (
 	phaseSplash phase = iota
 	phasePickProvider
 	phasePickModel
+	phasePickSession
 	phaseModelInput
 	phaseInput
 	phaseRunning
@@ -45,7 +46,10 @@ type pane int
 const (
 	paneLog pane = iota
 	paneIO
+	paneSessions
 )
+
+const attachAllID = "*"
 
 type tickMsg time.Time
 
@@ -56,14 +60,20 @@ type modelsMsg struct {
 	Err    error
 }
 
+type cursorSessionsMsg struct {
+	Picks []agent.CursorPick
+	Err   error
+}
+
 type pickItem struct {
 	ID     string
 	Title  string
 	Detail string
+	Meta   string
 	Usable bool
 }
 
-type StartFn func(goal, provider, model string)
+type StartFn func(goal, provider, model, cursorWS, cursorSess string)
 type FollowFn func(text string)
 type ModeFn func() string
 type ApproveFn func()
@@ -82,40 +92,46 @@ type Options struct {
 	OnApprove  ApproveFn
 	Catalog    provider.Status
 	ListModels func(providerID string) ([]string, error)
+	ListCursor func() ([]agent.CursorPick, error)
+	CursorSess string
+	CursorWS   string
 }
 
 type Model struct {
-	phase     phase
-	overlay   overlay
-	input     textinput.Model
-	spin      spinner.Model
-	vp        viewport.Model
-	goal      string
-	agent     string
-	provider  string
-	model     string
-	hub       *run.Hub
-	cancel    context.CancelFunc
-	inspect   bool
-	width     int
-	height    int
-	start     time.Time
-	ready     bool
-	err       error
-	onStart   StartFn
-	onFollow  FollowFn
-	onMode    ModeFn
-	onApprove ApproveFn
-	external  bool
-	catalog   provider.Status
-	listFn    func(string) ([]string, error)
-	items     []pickItem
-	cursor    int
-	hint      string
-	prefix    bool
-	models    []string
-	pane      pane
-	follow    bool
+	phase      phase
+	overlay    overlay
+	input      textinput.Model
+	spin       spinner.Model
+	vp         viewport.Model
+	goal       string
+	agent      string
+	provider   string
+	model      string
+	hub        *run.Hub
+	cancel     context.CancelFunc
+	inspect    bool
+	width      int
+	height     int
+	start      time.Time
+	ready      bool
+	err        error
+	onStart    StartFn
+	onFollow   FollowFn
+	onMode     ModeFn
+	onApprove  ApproveFn
+	external   bool
+	catalog    provider.Status
+	listFn     func(string) ([]string, error)
+	listCursor func() ([]agent.CursorPick, error)
+	cursorSess string
+	cursorWS   string
+	items      []pickItem
+	cursor     int
+	hint       string
+	prefix     bool
+	models     []string
+	pane       pane
+	follow     bool
 }
 
 func New(opts Options) Model {
@@ -130,27 +146,30 @@ func New(opts Options) Model {
 	s.Style = spinStyle
 
 	m := Model{
-		phase:     phaseSplash,
-		input:     ti,
-		spin:      s,
-		goal:      opts.Goal,
-		agent:     opts.Agent,
-		provider:  opts.Provider,
-		model:     opts.Model,
-		external:  agent.IsExternal(opts.Agent),
-		onMode:    opts.OnMode,
-		onApprove: opts.OnApprove,
-		hub:       opts.Hub,
-		cancel:    opts.Cancel,
-		inspect:   opts.Inspect,
-		width:     80,
-		height:    24,
-		start:     time.Now(),
-		onStart:   opts.OnStart,
-		onFollow:  opts.OnFollow,
-		catalog:   opts.Catalog,
-		listFn:    opts.ListModels,
-		follow:    true,
+		phase:      phaseSplash,
+		input:      ti,
+		spin:       s,
+		goal:       opts.Goal,
+		agent:      opts.Agent,
+		provider:   opts.Provider,
+		model:      opts.Model,
+		external:   agent.IsExternal(opts.Agent),
+		onMode:     opts.OnMode,
+		onApprove:  opts.OnApprove,
+		hub:        opts.Hub,
+		cancel:     opts.Cancel,
+		inspect:    opts.Inspect,
+		width:      80,
+		height:     24,
+		start:      time.Now(),
+		onStart:    opts.OnStart,
+		onFollow:   opts.OnFollow,
+		catalog:    opts.Catalog,
+		listFn:     opts.ListModels,
+		listCursor: opts.ListCursor,
+		cursorSess: opts.CursorSess,
+		cursorWS:   opts.CursorWS,
+		follow:     true,
 	}
 	if opts.Inspect {
 		m.phase = phaseDone
@@ -187,7 +206,26 @@ func (m Model) fetchModels() tea.Cmd {
 	}
 }
 
+func (m Model) fetchCursorSessions() tea.Cmd {
+	fn := m.listCursor
+	return func() tea.Msg {
+		if fn == nil {
+			return cursorSessionsMsg{Err: fmt.Errorf("Cursor is not open or no sessions found")}
+		}
+		picks, err := fn()
+		return cursorSessionsMsg{Picks: picks, Err: err}
+	}
+}
+
 func (m Model) advanceSetup() (Model, tea.Cmd) {
+	if agent.TypeOf(m.agent) == "cursor" {
+		if m.cursorSess != "" {
+			return m.beginRun()
+		}
+		m.phase = phasePickSession
+		m.hint = "scanning open Cursor windows…"
+		return m, m.fetchCursorSessions()
+	}
 	if m.external {
 		return m.beginRun()
 	}
@@ -225,7 +263,7 @@ func (m Model) advanceSetup() (Model, tea.Cmd) {
 func (m Model) beginRun() (Model, tea.Cmd) {
 	m.phase = phaseRunning
 	if m.onStart != nil {
-		m.onStart(m.goal, m.provider, m.model)
+		m.onStart(m.goal, m.provider, m.model, m.cursorWS, m.cursorSess)
 	}
 	return m, nil
 }
@@ -304,9 +342,12 @@ func (m Model) beginFollow(text string) (Model, tea.Cmd) {
 }
 
 func (m Model) togglePane() (Model, tea.Cmd) {
-	if m.pane == paneLog {
+	switch m.pane {
+	case paneLog:
 		m.pane = paneIO
-	} else {
+	case paneIO:
+		m.pane = paneSessions
+	default:
 		m.pane = paneLog
 	}
 	m.syncPane()
@@ -322,13 +363,16 @@ func (m *Model) syncPane() {
 
 func (m *Model) refreshPane(snap Snapshot) {
 	inner := paneInnerWidth(m.vp)
-	if m.pane == paneIO {
+	switch m.pane {
+	case paneIO:
 		wait := ""
 		if !snap.Done && m.phase == phaseRunning {
 			wait = m.chatWaitLine()
 		}
 		m.vp.SetContent(renderModelIO(snap, inner, wait))
-	} else {
+	case paneSessions:
+		m.vp.SetContent(renderSessions(snap, inner))
+	default:
 		m.vp.SetContent(renderEvents(snap.Events, inner))
 	}
 	if m.follow {
@@ -436,6 +480,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.items = modelItems(msg.Models)
 		m.cursor = 0
 		return m, nil
+
+	case cursorSessionsMsg:
+		return m.applyCursorSessions(msg)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -633,6 +680,10 @@ func (m Model) runPrefix(cmd string) (tea.Model, tea.Cmd) {
 		m.pane = paneIO
 		m.syncPane()
 		return m, nil
+	case "sessions":
+		m.pane = paneSessions
+		m.syncPane()
+		return m, nil
 	case "mode":
 		if m.onMode != nil {
 			mode := m.onMode()
@@ -685,29 +736,70 @@ func (m Model) handlePicker(key string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
-		if m.cursor < 0 || m.cursor >= len(m.items) {
+		return m.selectPicker()
+	}
+	if n := digitIndex(key); n >= 0 && n < len(m.items) {
+		m.cursor = n
+		return m.selectPicker()
+	}
+	return m, nil
+}
+
+func (m Model) selectPicker() (tea.Model, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.items) {
+		return m, nil
+	}
+	it := m.items[m.cursor]
+	if m.phase == phasePickProvider {
+		if !it.Usable {
+			m.hint = it.Detail
 			return m, nil
 		}
-		it := m.items[m.cursor]
-		if m.phase == phasePickProvider {
-			if !it.Usable {
-				m.hint = it.Detail
-				return m, nil
-			}
-			m.provider = it.ID
-			m.model = ""
-			return m.advanceSetup()
-		}
-		m.model = it.ID
-		if m.goal == "" {
-			m.phase = phaseInput
-			m.input.Placeholder = "what should temper do?"
-			m.input.SetValue("")
-			m.input.Focus()
-			return m, textinput.Blink
+		m.provider = it.ID
+		m.model = ""
+		return m.advanceSetup()
+	}
+	if m.phase == phasePickSession {
+		if it.ID == attachAllID {
+			m.cursorSess = "*"
+			m.cursorWS = ""
+		} else {
+			m.cursorSess = it.ID
+			m.cursorWS = it.Meta
 		}
 		return m.beginRun()
 	}
+	m.model = it.ID
+	if m.goal == "" {
+		m.phase = phaseInput
+		m.input.Placeholder = "what should temper do?"
+		m.input.SetValue("")
+		m.input.Focus()
+		return m, textinput.Blink
+	}
+	return m.beginRun()
+}
+
+func (m Model) applyCursorSessions(msg cursorSessionsMsg) (Model, tea.Cmd) {
+	if msg.Err != nil {
+		m.hint = msg.Err.Error()
+		m.items = nil
+		return m, nil
+	}
+	if len(msg.Picks) == 0 {
+		m.hint = "no composer sessions in open Cursor windows"
+		m.items = nil
+		return m, nil
+	}
+	if len(msg.Picks) == 1 {
+		m.cursorSess = msg.Picks[0].SessionID
+		m.cursorWS = msg.Picks[0].Workspace
+		return m.beginRun()
+	}
+	m.phase = phasePickSession
+	m.items = cursorSessionItems(msg.Picks)
+	m.cursor = 0
+	m.hint = fmt.Sprintf("%d open sessions — attach one or all", len(msg.Picks))
 	return m, nil
 }
 
@@ -758,6 +850,8 @@ func (m Model) viewPicker() string {
 	title := "choose provider"
 	if m.phase == phasePickModel {
 		title = "choose model  ·  " + nz(m.provider, "provider")
+	} else if m.phase == phasePickSession {
+		title = "attach session  ·  cursor"
 	}
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("TEMPER"))
@@ -786,7 +880,7 @@ func (m Model) viewPicker() string {
 		b.WriteString(yellow.Render(m.hint))
 		b.WriteString("\n")
 	}
-	b.WriteString(dimStyle.Render("j/k move  enter select  " + m.prefixHint()))
+	b.WriteString(dimStyle.Render("j/k move  1-9 jump  enter select  " + m.prefixHint()))
 	return b.String()
 }
 
@@ -823,6 +917,8 @@ func (m Model) viewRun() string {
 	prov := "—"
 	if !m.external {
 		prov = nz(nz(snap.Provider, m.provider), "—")
+	} else if n := len(snap.Sessions); n > 1 {
+		prov = fmt.Sprintf("%d sessions", n)
 	} else if snap.SessionID != "" {
 		prov = short(snap.SessionID, 18)
 	}
@@ -883,7 +979,7 @@ func (m Model) footer(snap Snapshot) string {
 
 func (m Model) prefixHint() string {
 	if m.prefix {
-		return prefixStyle.Render("prefix") + dimStyle.Render("  s ? e a y n t l q j k g G")
+		return prefixStyle.Render("prefix") + dimStyle.Render("  s ? e a y n t l w q j k g G")
 	}
 	return "ctrl+b prefix  ·  ctrl+c cancel"
 }
@@ -912,20 +1008,21 @@ recovery   %s
 pending    %s
 mode       %s
 session    %s
+sessions   %d
 attach     %s
 judge      %s`,
 		snap.RunID, snap.State, snap.Goal, nz(snap.ActiveGoal, snap.Goal), nz(snap.Agent, m.agent), nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
 		snap.BudgetUsed, snap.BudgetMax, snap.TokensPrompt, snap.TokensCompletion, snap.TokensJudge,
 		snap.Reflex.State, strings.Join(snap.Reflex.Reasons, ", "),
 		nz(snap.RecoveryRung, "—"), nz(snap.PendingRecovery, "—"), nz(snap.ReflexMode, "human"),
-		nz(snap.SessionID, "—"), nz(snap.Attach, "—"), judge)
+		nz(snap.SessionID, "—"), len(snap.Sessions), nz(snap.Attach, "—"), judge)
 	return overlayBox("status", body, m.width)
 }
 
 func helpOverlay(width int) string {
 	return overlayBox("keys", `ctrl+b  command prefix
 then:   s status  ? help  e last eval
-        t model io  l event log
+        t model io  l event log  w sessions
         j/k scroll  g/G top/bottom
         a toggle reflex human/auto  y approve recovery
         n new goal  q quit  esc cancel prefix
@@ -933,7 +1030,7 @@ then:   s status  ? help  e last eval
 end     jump to latest (re-enables follow)
 g / G   top / latest while a run is live
 wheel   scroll  ·  live follow until you scroll up
-tab     switch log / model io
+tab     cycle log / model io / sessions
 ctrl+c  cancel run (no prefix)
 enter   reply in this thread when done`, width)
 }
@@ -961,10 +1058,14 @@ type Snapshot = run.Snapshot
 func snapFrom(s run.Snapshot) Snapshot { return s }
 
 func paneLabel(p pane) string {
-	if p == paneIO {
+	switch p {
+	case paneIO:
 		return "io"
+	case paneSessions:
+		return "sessions"
+	default:
+		return "log"
 	}
-	return "log"
 }
 
 func scrollLabel(m Model) string {
@@ -975,6 +1076,42 @@ func scrollLabel(m Model) string {
 		return "live"
 	}
 	return fmt.Sprintf("%d%%", int(m.vp.ScrollPercent()*100))
+}
+
+func renderSessions(snap Snapshot, width int) string {
+	if width < 24 {
+		width = 24
+	}
+	if len(snap.Sessions) == 0 {
+		return dimStyle.Render("no sessions attached")
+	}
+	var b strings.Builder
+	b.WriteString(bold.Render(fmt.Sprintf("%d connected  ·  tab cycles log / io / sessions", len(snap.Sessions))))
+	b.WriteString("\n\n")
+	for _, s := range snap.Sessions {
+		mark := " "
+		if s.Focus || (snap.FocusSession != "" && s.Session == snap.FocusSession) {
+			mark = "*"
+		}
+		head := fmt.Sprintf("%s %-8s  %-16s  %s", mark, nz(s.Agent, "—"), nz(s.Label, "—"), short(s.Session, 36))
+		if mark == "*" {
+			b.WriteString(bold.Render(clipWidth(head, width)))
+		} else {
+			b.WriteString(clipWidth(head, width))
+		}
+		b.WriteString("\n")
+		if s.Preview != "" {
+			b.WriteString(dimStyle.Render("      " + clipWidth(s.Preview, width-6)))
+			b.WriteString("\n")
+		}
+		meta := nz(s.Attach, "attached")
+		if s.Workspace != "" {
+			meta += "  ·  " + s.Workspace
+		}
+		b.WriteString(dimStyle.Render("      " + clipWidth(meta, width-6)))
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func renderEvents(evs []event.Event, width int) string {
@@ -1322,6 +1459,49 @@ func modelItems(names []string) []pickItem {
 		out = append(out, pickItem{ID: n, Title: n, Detail: "", Usable: true})
 	}
 	return out
+}
+
+func cursorSessionItems(picks []agent.CursorPick) []pickItem {
+	items := []pickItem{{
+		ID:     attachAllID,
+		Title:  "attach all",
+		Detail: fmt.Sprintf("%d sessions across open windows", len(picks)),
+		Usable: true,
+	}}
+	for _, p := range picks {
+		items = append(items, pickItem{
+			ID:     p.SessionID,
+			Title:  nz(p.Label, "cursor"),
+			Detail: ageSince(p.ModTime) + "  ·  " + nz(p.Preview, short(p.SessionID, 12)),
+			Meta:   p.Workspace,
+			Usable: true,
+		})
+	}
+	return items
+}
+
+func digitIndex(key string) int {
+	if len(key) != 1 || key[0] < '1' || key[0] > '9' {
+		return -1
+	}
+	return int(key[0] - '1')
+}
+
+func ageSince(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 func firstUsable(items []pickItem) int {

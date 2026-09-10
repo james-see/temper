@@ -159,6 +159,7 @@ type Flags struct {
 	Agent    string
 	Provider string
 	Model    string
+	Session  string
 }
 
 type Loaded struct {
