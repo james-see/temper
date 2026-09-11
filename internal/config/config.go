@@ -187,8 +187,10 @@ func Defaults() Config {
 			"openrouter":   {Type: "openrouter"},
 		},
 		Agents: map[string]Agent{
-			"native": {Type: "temper"},
-			"hermes": {Type: "hermes"},
+			"native":   {Type: "temper"},
+			"hermes":   {Type: "hermes"},
+			"opencode": {Type: "opencode"},
+			"cursor":   {Type: "cursor"},
 		},
 		Reflex: Reflex{
 			Mode: ReflexAuto,

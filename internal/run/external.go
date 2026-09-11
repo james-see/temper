@@ -47,7 +47,8 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 	} else if _, err := side.Start(ctx, agent.TaskRequest{
 		RunID: id, Prompt: opts.Goal, Workspace: reqWS, Session: opts.CursorSession,
 	}); err != nil {
-		if side.ID() == "hermes" && !strings.Contains(err.Error(), "PATH") {
+		soft := (side.ID() == "hermes" || side.ID() == "opencode") && !strings.Contains(err.Error(), "PATH")
+		if soft {
 			m.debug("sidecar.start", "err", err.Error(), "cmd", side.LaunchLine(), "id", side.ID())
 		} else {
 			return m.fail(ctx, err)
@@ -98,20 +99,103 @@ func (m *Manager) openSidecar(opts Options, dec arbiter.Decision) (agent.Sidecar
 		}
 		return opts.Hermes, "session+logs", nil
 	}
+	targets, err := resolveAttachTargets(opts, dec.Selected.Agent)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(targets) > 0 {
+		return m.openAttached(opts, targets)
+	}
 	typ := agent.TypeOf(dec.Selected.Agent)
 	switch typ {
 	case "hermes":
-		cmd := "hermes"
-		if a, ok := m.Cfg.Agents[dec.Selected.Agent]; ok && a.Command != "" {
-			cmd = a.Command
-		} else if a, ok := m.Cfg.Agents["hermes"]; ok && a.Command != "" {
-			cmd = a.Command
-		}
-		return agent.NewHermes(cmd, !opts.SkipSpawn), "session+logs", nil
+		return agent.NewHermes(agentCommand(m.Cfg, dec.Selected.Agent, "hermes"), !opts.SkipSpawn), "session+logs", nil
+	case "opencode":
+		return agent.NewOpenCode(agentCommand(m.Cfg, dec.Selected.Agent, "opencode"), !opts.SkipSpawn), "session+logs", nil
 	case "cursor":
 		return m.openCursor(opts)
 	default:
 		return nil, "", agent.UnimplementedError(dec.Selected.Agent)
+	}
+}
+
+func agentCommand(cfg config.Config, selected, fallback string) string {
+	cmd := fallback
+	if a, ok := cfg.Agents[selected]; ok && a.Command != "" {
+		return a.Command
+	}
+	if a, ok := cfg.Agents[fallback]; ok && a.Command != "" {
+		return a.Command
+	}
+	return cmd
+}
+
+func (m *Manager) openAttached(opts Options, targets []agent.SessionPick) (agent.Sidecar, string, error) {
+	var items []agent.Sidecar
+	modes := map[string]bool{}
+	for _, t := range targets {
+		side, mode, err := m.startAttached(opts, t)
+		if err != nil {
+			return nil, "", err
+		}
+		items = append(items, side)
+		modes[mode] = true
+	}
+	attach := "session+logs"
+	if len(modes) == 1 && modes["ide-transcripts"] {
+		attach = "ide-transcripts"
+	} else if len(modes) > 1 {
+		attach = "multi"
+	}
+	if len(items) == 1 {
+		return items[0], attach, nil
+	}
+	name := "attach"
+	if len(targets) > 0 {
+		agents := map[string]bool{}
+		for _, t := range targets {
+			agents[agent.TypeOf(t.Agent)] = true
+		}
+		if len(agents) == 1 {
+			for a := range agents {
+				name = a
+			}
+		}
+	}
+	return agent.NewMux(name, items), attach, nil
+}
+
+func (m *Manager) startAttached(opts Options, t agent.SessionPick) (agent.Sidecar, string, error) {
+	typ := agent.TypeOf(t.Agent)
+	if typ == "" {
+		typ = agent.Normalize(t.Agent)
+	}
+	ws := t.Workspace
+	if ws == "" {
+		ws = opts.Root
+	}
+	req := agent.TaskRequest{Workspace: ws, Session: t.SessionID, Prompt: opts.Goal}
+	switch typ {
+	case "cursor":
+		c := agent.NewCursor()
+		if _, err := c.Start(context.Background(), req); err != nil {
+			return nil, "", err
+		}
+		return c, "ide-transcripts", nil
+	case "hermes":
+		h := agent.NewHermes(agentCommand(m.Cfg, t.Agent, "hermes"), false)
+		if _, err := h.Start(context.Background(), req); err != nil {
+			return nil, "", err
+		}
+		return h, "session+logs", nil
+	case "opencode":
+		o := agent.NewOpenCode(agentCommand(m.Cfg, t.Agent, "opencode"), false)
+		if _, err := o.Start(context.Background(), req); err != nil {
+			return nil, "", err
+		}
+		return o, "session+logs", nil
+	default:
+		return nil, "", agent.UnimplementedError(t.Agent)
 	}
 }
 
@@ -123,20 +207,41 @@ func (m *Manager) openCursor(opts Options) (agent.Sidecar, string, error) {
 	if len(targets) == 0 {
 		return agent.NewCursor(), "ide-transcripts", nil
 	}
-	var items []agent.Sidecar
+	picks := make([]agent.SessionPick, 0, len(targets))
 	for _, t := range targets {
-		c := agent.NewCursor()
-		if _, err := c.Start(context.Background(), agent.TaskRequest{
-			Workspace: t.Workspace, Session: t.SessionID,
-		}); err != nil {
-			return nil, "", err
+		picks = append(picks, agent.CursorToSessionPick(t))
+	}
+	return m.openAttached(opts, picks)
+}
+
+func resolveAttachTargets(opts Options, selectedAgent string) ([]agent.SessionPick, error) {
+	if len(opts.AttachTargets) > 0 {
+		return opts.AttachTargets, nil
+	}
+	// Legacy cursor-only fields.
+	cps, err := resolveCursorTargets(opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(cps) == 0 {
+		// --session for hermes/opencode without AttachTargets
+		sess := strings.TrimSpace(opts.CursorSession)
+		if sess == "" || sess == "*" || strings.EqualFold(sess, "all") {
+			return nil, nil
 		}
-		items = append(items, c)
+		typ := agent.TypeOf(selectedAgent)
+		if typ == "hermes" || typ == "opencode" {
+			return []agent.SessionPick{{
+				Agent: typ, SessionID: sess, Workspace: opts.CursorWorkspace,
+			}}, nil
+		}
+		return nil, nil
 	}
-	if len(items) == 1 {
-		return items[0], "ide-transcripts", nil
+	out := make([]agent.SessionPick, 0, len(cps))
+	for _, p := range cps {
+		out = append(out, agent.CursorToSessionPick(p))
 	}
-	return agent.NewMux("cursor", items), "ide-transcripts", nil
+	return out, nil
 }
 
 func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
@@ -146,9 +251,17 @@ func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
 	sess := strings.TrimSpace(opts.CursorSession)
 	all := opts.CursorAttachAll || sess == "*" || strings.EqualFold(sess, "all")
 	if all {
+		typ := agent.TypeOf(opts.Agent)
+		if typ != "" && typ != "cursor" {
+			return nil, nil
+		}
 		return agent.LiveCursorPicks()
 	}
 	if sess != "" {
+		typ := agent.TypeOf(opts.Agent)
+		if typ == "hermes" || typ == "opencode" {
+			return nil, nil
+		}
 		if opts.CursorWorkspace != "" {
 			return []agent.CursorPick{{SessionID: sess, Workspace: opts.CursorWorkspace}}, nil
 		}
@@ -164,6 +277,9 @@ func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
 func attachMode(id string) string {
 	if id == "cursor" {
 		return "ide-transcripts"
+	}
+	if id == "attach" || id == "mux" {
+		return "multi"
 	}
 	return "session+logs"
 }

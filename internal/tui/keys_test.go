@@ -294,15 +294,18 @@ func TestExternalSkipsPickers(t *testing.T) {
 	started := false
 	m := New(Options{
 		Agent: "hermes",
-		OnStart: func(goal, provider, model, cursorWS, cursorSess string) {
+		OnStart: func(goal, provider, model string, attach AttachSpec) {
 			started = true
-			if goal != "" || provider != "" || model != "" || cursorWS != "" || cursorSess != "" {
-				t.Fatalf("sidecar start %q %q %q %q %q", goal, provider, model, cursorWS, cursorSess)
+			if goal != "" || provider != "" || model != "" || !attach.Spawn {
+				t.Fatalf("sidecar start %q %q %q %+v", goal, provider, model, attach)
 			}
 		},
+		ListSessions: func(string) ([]agent.SessionPick, error) { return nil, nil },
 	})
 	next, _ := m.Update(splashDone{})
 	got := next.(Model)
+	next, _ = got.Update(sessionPicksMsg{})
+	got = next.(Model)
 	if got.phase != phaseRunning {
 		t.Fatalf("phase %d", got.phase)
 	}
@@ -351,64 +354,45 @@ func TestPickerJK(t *testing.T) {
 }
 
 func TestCursorAutoAttachesOne(t *testing.T) {
-	var gotWS, gotSess string
+	var got AttachSpec
 	m := New(Options{
-		Agent: "cursor",
-		OnStart: func(_, _, _, ws, sess string) {
-			gotWS, gotSess = ws, sess
-		},
+		Agent:   "cursor",
+		OnStart: func(_, _, _ string, attach AttachSpec) { got = attach },
 	})
-	next, _ := m.Update(cursorSessionsMsg{Picks: []agent.CursorPick{{
-		SessionID: "abc", Workspace: "/Users/jc/p/temper", Label: "temper",
+	next, _ := m.Update(sessionPicksMsg{Picks: []agent.SessionPick{{
+		Agent: "cursor", SessionID: "abc", Workspace: "/Users/jc/p/temper", Label: "temper",
 	}}})
-	got := next.(Model)
-	if got.phase != phaseRunning {
-		t.Fatalf("phase %d", got.phase)
+	gotM := next.(Model)
+	if gotM.phase != phaseRunning {
+		t.Fatalf("phase %d", gotM.phase)
 	}
-	if gotSess != "abc" || gotWS != "/Users/jc/p/temper" {
-		t.Fatalf("attached %q %q", gotWS, gotSess)
+	if len(got.Targets) != 1 || got.Targets[0].SessionID != "abc" || got.Targets[0].Workspace != "/Users/jc/p/temper" {
+		t.Fatalf("attached %+v", got.Targets)
 	}
 }
 
 func TestCursorPickerAttachAll(t *testing.T) {
-	var gotSess string
+	var got AttachSpec
 	m := New(Options{
 		Agent:   "cursor",
-		OnStart: func(_, _, _, _, sess string) { gotSess = sess },
+		OnStart: func(_, _, _ string, attach AttachSpec) { got = attach },
 	})
-	next, _ := m.Update(cursorSessionsMsg{Picks: []agent.CursorPick{
-		{SessionID: "a", Workspace: "/t", Label: "temper"},
-		{SessionID: "b", Workspace: "/v", Label: "vala"},
+	next, _ := m.Update(sessionPicksMsg{Picks: []agent.SessionPick{
+		{Agent: "cursor", SessionID: "a", Workspace: "/t", Label: "temper"},
+		{Agent: "cursor", SessionID: "b", Workspace: "/v", Label: "vala"},
 	}})
-	got := next.(Model)
-	if got.phase != phasePickSession {
-		t.Fatalf("phase %d", got.phase)
+	gotM := next.(Model)
+	if gotM.phase != phasePickSession {
+		t.Fatalf("phase %d", gotM.phase)
 	}
-	if len(got.items) != 3 || got.items[0].ID != attachAllID {
-		t.Fatalf("items %+v", got.items)
+	if gotM.items[0].ID != attachAllID {
+		t.Fatalf("items %+v", gotM.items)
 	}
-	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-	got = next.(Model)
-	if got.phase != phaseRunning || gotSess != "*" {
-		t.Fatalf("phase %d sess %q", got.phase, gotSess)
-	}
-}
-
-func TestCursorPickerDigitSelects(t *testing.T) {
-	var gotSess, gotWS string
-	m := New(Options{
-		Agent:   "cursor",
-		OnStart: func(_, _, _, ws, sess string) { gotWS, gotSess = ws, sess },
-	})
-	next, _ := m.Update(cursorSessionsMsg{Picks: []agent.CursorPick{
-		{SessionID: "a", Workspace: "/t", Label: "temper"},
-		{SessionID: "b", Workspace: "/v", Label: "vala"},
-	}})
-	got := next.(Model)
-	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	got = next.(Model)
-	if gotSess != "a" || gotWS != "/t" {
-		t.Fatalf("digit 2 -> %q %q", gotWS, gotSess)
+	gotM.cursor = 0
+	next, _ = gotM.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	gotM = next.(Model)
+	if gotM.phase != phaseRunning || len(got.Targets) != 2 {
+		t.Fatalf("phase %d targets %+v", gotM.phase, got.Targets)
 	}
 }
 

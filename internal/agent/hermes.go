@@ -88,6 +88,9 @@ func (h *Hermes) Start(_ context.Context, req TaskRequest) (Session, error) {
 	if h.workspace == "" {
 		h.workspace, _ = os.Getwd()
 	}
+	if req.Session != "" {
+		h.Bind(req.Session)
+	}
 	// Hermes is a slow Python CLI (~10s for --version). Do not block launch on it.
 	h.started = h.now()
 	h.argv = hermesLaunchArgs(h.workspace, req.Prompt)

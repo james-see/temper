@@ -18,8 +18,11 @@ func TestResolveKnownAndConfigured(t *testing.T) {
 	if !IsNative("native") || IsExternal("native") {
 		t.Fatal("native flags")
 	}
-	if Implemented("opencode") {
-		t.Fatal("opencode not wired")
+	if !Implemented("opencode") || !IsExternal("opencode") || IsNative("opencode") {
+		t.Fatal("opencode flags")
+	}
+	if !Implemented("cursor") {
+		t.Fatal("cursor wired")
 	}
 	cfg.Agents = map[string]config.Agent{"mine": {Type: "hermes"}}
 	name, typ, ok = Resolve("mine", cfg)

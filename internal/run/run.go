@@ -109,6 +109,7 @@ type Options struct {
 	CursorSession   string
 	CursorAttachAll bool
 	CursorTargets   []agent.CursorPick
+	AttachTargets   []agent.SessionPick
 }
 
 type pendingRec struct {
@@ -195,8 +196,14 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		return store.Run{}, err
 	}
 	dec := arbiter.Select(m.Cfg, opts.Agent, opts.Provider, opts.Model)
-	if agent.IsExternal(dec.Selected.Agent) {
-		if !agent.Implemented(dec.Selected.Agent) {
+	if len(opts.AttachTargets) > 0 {
+		if dec.Selected.Agent == "" || dec.Selected.Agent == "native" {
+			dec.Selected.Agent = opts.AttachTargets[0].Agent
+		}
+	}
+	external := agent.IsExternal(dec.Selected.Agent) || len(opts.AttachTargets) > 0
+	if external {
+		if len(opts.AttachTargets) == 0 && !agent.Implemented(dec.Selected.Agent) {
 			return store.Run{}, agent.UnimplementedError(dec.Selected.Agent)
 		}
 		ws.Attach()
@@ -244,7 +251,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	emit(event.RoutingDecided, "arbiter", dec)
 	emit(event.AgentSelected, "arbiter", dec.Selected)
 
-	if agent.IsExternal(dec.Selected.Agent) {
+	if external {
 		return m.startExternal(ctx, opts, ws, dec, tried, id)
 	}
 

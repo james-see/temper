@@ -80,7 +80,7 @@ See [`examples/temper.yaml`](examples/temper.yaml). Data dir: `.temper/` in the 
 
 OpenAI-compatible (OpenAI, oMLX `localhost:8000`), Ollama `/api/chat`, Anthropic Messages, Gemini `generateContent`.
 
-v0.1 agent is **native** only (shell, read, write, patch, search, git). External agents are v0.2.
+External agents wired today: **native**, **Hermes**, **Cursor**, **OpenCode**. Plain `temper` scans live Cursor/Hermes/OpenCode sessions and offers a multi-select attach picker (space/enter/all); `temper opencode` (etc.) scopes to that agent.
 
 ## Reflex judge
 

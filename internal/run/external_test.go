@@ -439,6 +439,22 @@ func TestResolveCursorTargets(t *testing.T) {
 	}
 }
 
+func TestResolveAttachTargetsHermesSession(t *testing.T) {
+	got, err := resolveAttachTargets(Options{
+		Agent: "hermes", CursorSession: "20260908_120000_bbbbbb", CursorWorkspace: "/ws",
+	}, "hermes")
+	if err != nil || len(got) != 1 || got[0].Agent != "hermes" || got[0].SessionID != "20260908_120000_bbbbbb" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	direct, err := resolveAttachTargets(Options{AttachTargets: []agent.SessionPick{
+		{Agent: "opencode", SessionID: "ses_1"},
+		{Agent: "hermes", SessionID: "h1"},
+	}}, "")
+	if err != nil || len(direct) != 2 {
+		t.Fatalf("%+v %v", direct, err)
+	}
+}
+
 func TestDescribeSidecarsMux(t *testing.T) {
 	a := &stubBound{id: "cursor", session: "aaa", ws: "/t"}
 	b := &stubBound{id: "hermes", session: "bbb", ws: "/v"}

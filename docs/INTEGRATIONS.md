@@ -6,11 +6,11 @@ Temper separates **agent runtimes**, **model providers**, **tools/protocols**, *
 
 | Agent | Priority | Notes |
 |---|---:|---|
-| OpenCode | P0 | Key meta-harness target; local/cloud model flexibility |
+| OpenCode | P0 | Wired as Sidecar; live session attach in TUI picker |
 | Claude Code | P0 | First-class external coding-agent adapter |
 | OpenAI Codex | P0 | First-class external coding-agent adapter |
-| Cursor Agents | P0 | First-class external coding-agent adapter |
-| Hermes Agent | P0 | Strong fit for delegation, research, and subagent workflows |
+| Cursor Agents | P0 | Wired as Sidecar via cursor-connect; live session attach |
+| Hermes Agent | P0 | Wired as Sidecar (session export + logs); live session attach |
 | Temper Native | P0 | Minimal native agent loop for direct provider execution |
 | Generic `exec` | P0 | Allows unsupported agent CLIs to be configured without a Temper release |
 | Goose | P1 | Community/first-party adapter candidate |

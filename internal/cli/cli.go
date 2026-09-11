@@ -21,7 +21,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.1.13"
+const Version = "0.1.14"
 
 func Execute() {
 	if err := root().Execute(); err != nil {
@@ -240,6 +240,12 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 				if strings.TrimSpace(goal) != "" {
 					fmt.Fprintf(os.Stdout, "  inject (turn boundary / stop hook): %q\n", goal)
 				}
+			case "opencode":
+				fmt.Fprintf(os.Stdout, "open a terminal in %s and run:\n  opencode", root)
+				if strings.TrimSpace(goal) != "" {
+					fmt.Fprintf(os.Stdout, " --prompt %q", goal)
+				}
+				fmt.Fprintln(os.Stdout)
 			default:
 				fmt.Fprintf(os.Stdout, "open a terminal and run:\n  hermes --tui --in %s --source temper\n", root)
 				if strings.TrimSpace(goal) != "" {
@@ -248,10 +254,21 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 			}
 			go printLive(runCtx, mgr)
 			_, sess, all := parseCursorSession(flags.Session)
-			_, err := mgr.Execute(runCtx, run.Options{
+			opts := run.Options{
 				Goal: goal, Root: root, Agent: flags.Agent, Plain: true, SkipSpawn: true,
 				CursorSession: sess, CursorAttachAll: all,
-			})
+			}
+			if all && agent.TypeOf(flags.Agent) != "cursor" {
+				picks, _ := agent.LiveSessionPicks(runCtx, agent.TypeOf(flags.Agent))
+				opts.AttachTargets = picks
+				opts.CursorAttachAll = false
+				opts.CursorSession = ""
+			} else if sess != "" && !all && (agent.TypeOf(flags.Agent) == "hermes" || agent.TypeOf(flags.Agent) == "opencode") {
+				opts.AttachTargets = []agent.SessionPick{{
+					Agent: agent.TypeOf(flags.Agent), SessionID: sess,
+				}}
+			}
+			_, err := mgr.Execute(runCtx, opts)
 			return err
 		}
 		printDiscovery(os.Stdout, catalog)
@@ -280,20 +297,37 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		return err
 	}
 
-	start := func(g, prov, model, cursorWS, cursorSess string) {
-		_, sess, all := parseCursorSession(cursorSess)
+	start := func(g, prov, model string, attach tui.AttachSpec) {
 		go func() {
-			_, _ = mgr.Execute(runCtx, run.Options{
-				Goal:            g,
-				Root:            root,
-				Agent:           flags.Agent,
-				Provider:        prov,
-				Model:           model,
-				Plain:           false,
-				CursorWorkspace: cursorWS,
-				CursorSession:   sess,
-				CursorAttachAll: all,
-			})
+			agentID := attach.Agent
+			if agentID == "" {
+				agentID = flags.Agent
+			}
+			opts := run.Options{
+				Goal:     g,
+				Root:     root,
+				Agent:    agentID,
+				Provider: prov,
+				Model:    model,
+				Plain:    false,
+			}
+			switch {
+			case attach.Native:
+				opts.Agent = ""
+			case len(attach.Targets) > 0:
+				opts.AttachTargets = attach.Targets
+				opts.SkipSpawn = true
+				if opts.Agent == "" {
+					opts.Agent = attach.Targets[0].Agent
+				}
+			case attach.Spawn:
+				opts.SkipSpawn = false
+			default:
+				_, sess, all := parseCursorSession(flags.Session)
+				opts.CursorSession = sess
+				opts.CursorAttachAll = all
+			}
+			_, _ = mgr.Execute(runCtx, opts)
 		}()
 	}
 	follow := func(text string) {
@@ -308,20 +342,25 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		cursorSess = "*"
 	}
 	return tui.Run(tui.Options{
-		Goal:       goal,
-		Agent:      flags.Agent,
-		Provider:   flags.Provider,
-		Model:      flags.Model,
-		Hub:        mgr.Hub,
-		Cancel:     cancel,
-		OnStart:    start,
-		OnFollow:   follow,
-		OnMode:     mgr.ToggleReflexMode,
-		OnApprove:  mgr.ApproveRecovery,
-		Catalog:    catalog,
+		Goal:     goal,
+		Agent:    flags.Agent,
+		Provider: flags.Provider,
+		Model:    flags.Model,
+		Hub:      mgr.Hub,
+		Cancel:   cancel,
+		OnStart:  start,
+		OnFollow: follow,
+		OnMode:   mgr.ToggleReflexMode,
+		OnApprove: mgr.ApproveRecovery,
+		Catalog:  catalog,
 		ListModels: listModels,
-		ListCursor: agent.LiveCursorPicks,
+		ListSessions: func(filter string) ([]agent.SessionPick, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			return agent.LiveSessionPicks(ctx, filter)
+		},
 		CursorSess: cursorSess,
+		CursorWS:   "",
 	})
 }
 

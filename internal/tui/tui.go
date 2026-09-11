@@ -49,8 +49,6 @@ const (
 	paneSessions
 )
 
-const attachAllID = "*"
-
 type tickMsg time.Time
 
 type catalogMsg struct{}
@@ -60,78 +58,84 @@ type modelsMsg struct {
 	Err    error
 }
 
-type cursorSessionsMsg struct {
-	Picks []agent.CursorPick
+type sessionPicksMsg struct {
+	Picks []agent.SessionPick
 	Err   error
 }
 
 type pickItem struct {
-	ID     string
-	Title  string
-	Detail string
-	Meta   string
-	Usable bool
+	ID       string
+	Title    string
+	Detail   string
+	Meta     string
+	Agent    string
+	Kind     string
+	Usable   bool
+	Header   bool
+	Selected bool
 }
 
-type StartFn func(goal, provider, model, cursorWS, cursorSess string)
+type StartFn func(goal, provider, model string, attach AttachSpec)
 type FollowFn func(text string)
 type ModeFn func() string
 type ApproveFn func()
 
 type Options struct {
-	Goal       string
-	Agent      string
-	Provider   string
-	Model      string
-	Hub        *run.Hub
-	Cancel     context.CancelFunc
-	Inspect    bool
-	OnStart    StartFn
-	OnFollow   FollowFn
-	OnMode     ModeFn
-	OnApprove  ApproveFn
-	Catalog    provider.Status
-	ListModels func(providerID string) ([]string, error)
-	ListCursor func() ([]agent.CursorPick, error)
-	CursorSess string
-	CursorWS   string
+	Goal         string
+	Agent        string
+	Provider     string
+	Model        string
+	Hub          *run.Hub
+	Cancel       context.CancelFunc
+	Inspect      bool
+	OnStart      StartFn
+	OnFollow     FollowFn
+	OnMode       ModeFn
+	OnApprove    ApproveFn
+	Catalog      provider.Status
+	ListModels   func(providerID string) ([]string, error)
+	ListSessions func(filterAgent string) ([]agent.SessionPick, error)
+	CursorSess   string
+	CursorWS     string
 }
 
 type Model struct {
-	phase      phase
-	overlay    overlay
-	input      textinput.Model
-	spin       spinner.Model
-	vp         viewport.Model
-	goal       string
-	agent      string
-	provider   string
-	model      string
-	hub        *run.Hub
-	cancel     context.CancelFunc
-	inspect    bool
-	width      int
-	height     int
-	start      time.Time
-	ready      bool
-	err        error
-	onStart    StartFn
-	onFollow   FollowFn
-	onMode     ModeFn
-	onApprove  ApproveFn
-	external   bool
-	catalog    provider.Status
-	listFn     func(string) ([]string, error)
-	listCursor func() ([]agent.CursorPick, error)
-	cursorSess string
-	cursorWS   string
-	items      []pickItem
-	cursor     int
-	hint       string
-	prefix     bool
-	models     []string
-	pane       pane
-	follow     bool
+	phase        phase
+	overlay      overlay
+	input        textinput.Model
+	spin         spinner.Model
+	vp           viewport.Model
+	goal         string
+	agent        string
+	provider     string
+	model        string
+	hub          *run.Hub
+	cancel       context.CancelFunc
+	inspect      bool
+	width        int
+	height       int
+	start        time.Time
+	ready        bool
+	err          error
+	onStart      StartFn
+	onFollow     FollowFn
+	onMode       ModeFn
+	onApprove    ApproveFn
+	external     bool
+	catalog      provider.Status
+	listFn       func(string) ([]string, error)
+	listSessions func(string) ([]agent.SessionPick, error)
+	cursorSess   string
+	cursorWS     string
+	attach       AttachSpec
+	sessionPicks []agent.SessionPick
+	items        []pickItem
+	cursor       int
+	hint         string
+	prefix       bool
+	models       []string
+	pane         pane
+	follow       bool
 }
 
 func New(opts Options) Model {
@@ -146,30 +150,30 @@ func New(opts Options) Model {
 	s.Style = spinStyle
 
 	m := Model{
-		phase:      phaseSplash,
-		input:      ti,
-		spin:       s,
-		goal:       opts.Goal,
-		agent:      opts.Agent,
-		provider:   opts.Provider,
-		model:      opts.Model,
-		external:   agent.IsExternal(opts.Agent),
-		onMode:     opts.OnMode,
-		onApprove:  opts.OnApprove,
-		hub:        opts.Hub,
-		cancel:     opts.Cancel,
-		inspect:    opts.Inspect,
-		width:      80,
-		height:     24,
-		start:      time.Now(),
-		onStart:    opts.OnStart,
-		onFollow:   opts.OnFollow,
-		catalog:    opts.Catalog,
-		listFn:     opts.ListModels,
-		listCursor: opts.ListCursor,
-		cursorSess: opts.CursorSess,
-		cursorWS:   opts.CursorWS,
-		follow:     true,
+		phase:        phaseSplash,
+		input:        ti,
+		spin:         s,
+		goal:         opts.Goal,
+		agent:        opts.Agent,
+		provider:     opts.Provider,
+		model:        opts.Model,
+		external:     agent.IsExternal(opts.Agent),
+		onMode:       opts.OnMode,
+		onApprove:    opts.OnApprove,
+		hub:          opts.Hub,
+		cancel:       opts.Cancel,
+		inspect:      opts.Inspect,
+		width:        80,
+		height:       24,
+		start:        time.Now(),
+		onStart:      opts.OnStart,
+		onFollow:     opts.OnFollow,
+		catalog:      opts.Catalog,
+		listFn:       opts.ListModels,
+		listSessions: opts.ListSessions,
+		cursorSess:   opts.CursorSess,
+		cursorWS:     opts.CursorWS,
+		follow:       true,
 	}
 	if opts.Inspect {
 		m.phase = phaseDone
@@ -206,29 +210,45 @@ func (m Model) fetchModels() tea.Cmd {
 	}
 }
 
-func (m Model) fetchCursorSessions() tea.Cmd {
-	fn := m.listCursor
+func (m Model) fetchSessionPicks() tea.Cmd {
+	fn := m.listSessions
+	filter := ""
+	if m.external {
+		filter = agent.TypeOf(m.agent)
+	}
 	return func() tea.Msg {
 		if fn == nil {
-			return cursorSessionsMsg{Err: fmt.Errorf("Cursor is not open or no sessions found")}
+			return sessionPicksMsg{}
 		}
-		picks, err := fn()
-		return cursorSessionsMsg{Picks: picks, Err: err}
+		picks, err := fn(filter)
+		return sessionPicksMsg{Picks: picks, Err: err}
 	}
 }
 
 func (m Model) advanceSetup() (Model, tea.Cmd) {
-	if agent.TypeOf(m.agent) == "cursor" {
-		if m.cursorSess != "" {
-			return m.beginRun()
+	// Pre-bound session (CLI --session) skips picker.
+	if m.external && m.cursorSess != "" {
+		m.attach = AttachSpec{Targets: []agent.SessionPick{{
+			Agent: agent.TypeOf(m.agent), SessionID: m.cursorSess, Workspace: m.cursorWS,
+		}}}
+		if m.cursorSess == "*" || strings.EqualFold(m.cursorSess, "all") {
+			m.attach = AttachSpec{} // runtime resolves attach-all for cursor
+			m.cursorSess = "*"
 		}
-		m.phase = phasePickSession
-		m.hint = "scanning open Cursor windows…"
-		return m, m.fetchCursorSessions()
-	}
-	if m.external {
 		return m.beginRun()
 	}
+	// Probe live sessions for external agents or plain temper.
+	if m.external || m.agent == "" {
+		m.phase = phasePickSession
+		m.hint = "scanning live sessions…"
+		return m, m.fetchSessionPicks()
+	}
+	return m.advanceNativeSetup()
+}
+
+func (m Model) advanceNativeSetup() (Model, tea.Cmd) {
+	m.external = false
+	m.attach = AttachSpec{Native: true}
 	if m.provider == "" {
 		if c, ok := m.catalog.BestCandidate(); ok && c.Usable {
 			m.provider = c.ID
@@ -263,7 +283,20 @@ func (m Model) advanceSetup() (Model, tea.Cmd) {
 func (m Model) beginRun() (Model, tea.Cmd) {
 	m.phase = phaseRunning
 	if m.onStart != nil {
-		m.onStart(m.goal, m.provider, m.model, m.cursorWS, m.cursorSess)
+		attach := m.attach
+		attach.Agent = m.agent
+		if attach.Native {
+			attach.Agent = ""
+		}
+		// Legacy cursor session string when no explicit targets.
+		if len(attach.Targets) == 0 && !attach.Spawn && !attach.Native && m.cursorSess != "" {
+			if m.cursorSess != "*" && !strings.EqualFold(m.cursorSess, "all") {
+				attach.Targets = []agent.SessionPick{{
+					Agent: agent.TypeOf(m.agent), SessionID: m.cursorSess, Workspace: m.cursorWS,
+				}}
+			}
+		}
+		m.onStart(m.goal, m.provider, m.model, attach)
 	}
 	return m, nil
 }
@@ -481,8 +514,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		return m, nil
 
-	case cursorSessionsMsg:
-		return m.applyCursorSessions(msg)
+	case sessionPicksMsg:
+		return m.applySessionPicks(msg)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -726,21 +759,32 @@ func (m Model) runPrefix(cmd string) (tea.Model, tea.Cmd) {
 func (m Model) handlePicker(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "j", "down":
-		if m.cursor < len(m.items)-1 {
-			m.cursor++
-		}
+		m.cursor = nextSelectable(m.items, m.cursor, 1)
 		return m, nil
 	case "k", "up":
-		if m.cursor > 0 {
-			m.cursor--
+		m.cursor = nextSelectable(m.items, m.cursor, -1)
+		return m, nil
+	case " ":
+		if m.phase == phasePickSession {
+			m.items = markToggle(m.items, m.cursor)
+			n := countSelected(m.items)
+			if n > 0 {
+				m.hint = fmt.Sprintf("%d selected — enter to attach", n)
+			} else {
+				m.hint = "space toggles  ·  enter attaches"
+			}
 		}
 		return m, nil
 	case "enter":
 		return m.selectPicker()
 	}
-	if n := digitIndex(key); n >= 0 && n < len(m.items) {
-		m.cursor = n
-		return m.selectPicker()
+	if n := digitIndex(key); n >= 0 {
+		// Digits jump focus only (do not auto-confirm) so multi-select is preserved.
+		idx := selectableIndex(m.items, n)
+		if idx >= 0 {
+			m.cursor = idx
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -757,17 +801,10 @@ func (m Model) selectPicker() (tea.Model, tea.Cmd) {
 		}
 		m.provider = it.ID
 		m.model = ""
-		return m.advanceSetup()
+		return m.advanceNativeSetup()
 	}
 	if m.phase == phasePickSession {
-		if it.ID == attachAllID {
-			m.cursorSess = "*"
-			m.cursorWS = ""
-		} else {
-			m.cursorSess = it.ID
-			m.cursorWS = it.Meta
-		}
-		return m.beginRun()
+		return m.selectSessionPicker(it)
 	}
 	m.model = it.ID
 	if m.goal == "" {
@@ -780,27 +817,111 @@ func (m Model) selectPicker() (tea.Model, tea.Cmd) {
 	return m.beginRun()
 }
 
-func (m Model) applyCursorSessions(msg cursorSessionsMsg) (Model, tea.Cmd) {
-	if msg.Err != nil {
+func (m Model) selectSessionPicker(it pickItem) (tea.Model, tea.Cmd) {
+	if it.Header || (!it.Usable && it.Kind != kindSession) {
+		return m, nil
+	}
+	if sel := selectedIndexes(m.items); len(sel) > 0 {
+		targets := expandSelectedItems(m.items, m.sessionPicks, sel)
+		if len(targets) == 0 {
+			m.hint = "no sessions selected"
+			return m, nil
+		}
+		m.agent = targets[0].Agent
+		m.external = true
+		m.attach = AttachSpec{Targets: targets}
+		return m.beginRun()
+	}
+	switch it.Kind {
+	case kindNative:
+		m.agent = ""
+		m.external = false
+		m.attach = AttachSpec{}
+		return m.advanceNativeSetup()
+	case kindSpawn:
+		m.agent = it.Agent
+		m.external = true
+		m.attach = AttachSpec{Spawn: true}
+		return m.beginRun()
+	case kindAttachAll, kindAgentAll, kindSession:
+		targets := resolveItemTargets(it, m.sessionPicks)
+		if len(targets) == 0 {
+			m.hint = "no sessions to attach"
+			return m, nil
+		}
+		m.agent = targets[0].Agent
+		m.external = true
+		m.attach = AttachSpec{Targets: targets}
+		return m.beginRun()
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) applySessionPicks(msg sessionPicksMsg) (Model, tea.Cmd) {
+	if msg.Err != nil && m.external && agent.TypeOf(m.agent) == "cursor" {
 		m.hint = msg.Err.Error()
 		m.items = nil
+		m.phase = phasePickSession
 		return m, nil
+	}
+	m.sessionPicks = msg.Picks
+	unified := !m.external
+	filter := ""
+	if m.external {
+		filter = agent.TypeOf(m.agent)
 	}
 	if len(msg.Picks) == 0 {
-		m.hint = "no composer sessions in open Cursor windows"
-		m.items = nil
-		return m, nil
+		if m.external {
+			// No live sessions — spawn new.
+			m.attach = AttachSpec{Spawn: true}
+			return m.beginRun()
+		}
+		return m.advanceNativeSetup()
 	}
-	if len(msg.Picks) == 1 {
-		m.cursorSess = msg.Picks[0].SessionID
-		m.cursorWS = msg.Picks[0].Workspace
+	if len(msg.Picks) == 1 && m.external {
+		p := normalizedPick(msg.Picks[0])
+		m.attach = AttachSpec{Targets: []agent.SessionPick{p}}
 		return m.beginRun()
 	}
 	m.phase = phasePickSession
-	m.items = cursorSessionItems(msg.Picks)
-	m.cursor = 0
-	m.hint = fmt.Sprintf("%d open sessions — attach one or all", len(msg.Picks))
+	m.items = sessionPickerItems(msg.Picks, filter, unified)
+	m.cursor = firstUsable(m.items)
+	if unified {
+		m.hint = fmt.Sprintf("%d live sessions — space multi-select  ·  enter attach", len(msg.Picks))
+	} else {
+		m.hint = fmt.Sprintf("%d %s sessions — space multi-select  ·  enter attach", len(msg.Picks), filter)
+	}
 	return m, nil
+}
+
+func nextSelectable(items []pickItem, cur, delta int) int {
+	if len(items) == 0 {
+		return 0
+	}
+	n := len(items)
+	for i := 0; i < n; i++ {
+		cur = (cur + delta + n) % n
+		if !items[cur].Header {
+			return cur
+		}
+	}
+	return cur
+}
+
+func selectableIndex(items []pickItem, n int) int {
+	// n is 0-based among selectable rows.
+	count := 0
+	for i, it := range items {
+		if it.Header {
+			continue
+		}
+		if count == n {
+			return i
+		}
+		count++
+	}
+	return -1
 }
 
 func (m Model) View() string {
@@ -851,7 +972,11 @@ func (m Model) viewPicker() string {
 	if m.phase == phasePickModel {
 		title = "choose model  ·  " + nz(m.provider, "provider")
 	} else if m.phase == phasePickSession {
-		title = "attach session  ·  cursor"
+		if m.external {
+			title = "attach session  ·  " + nz(agent.TypeOf(m.agent), "agent")
+		} else {
+			title = "attach live sessions"
+		}
 	}
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("TEMPER"))
@@ -865,8 +990,14 @@ func (m Model) viewPicker() string {
 		if i == m.cursor {
 			cur = "> "
 		}
-		line := fmt.Sprintf("%s%-16s  %s", cur, it.Title, it.Detail)
-		if i == m.cursor {
+		mark := ""
+		if m.phase == phasePickSession && !it.Header && it.Kind != kindSpawn && it.Kind != kindNative {
+			mark = pickerCheckMark(it.Selected)
+		}
+		line := fmt.Sprintf("%s%s%-20s  %s", cur, mark, it.Title, it.Detail)
+		if it.Header {
+			b.WriteString(dimStyle.Render("  " + it.Title))
+		} else if i == m.cursor {
 			b.WriteString(bold.Render(line))
 		} else if !it.Usable {
 			b.WriteString(dimStyle.Render(line))
@@ -880,7 +1011,11 @@ func (m Model) viewPicker() string {
 		b.WriteString(yellow.Render(m.hint))
 		b.WriteString("\n")
 	}
-	b.WriteString(dimStyle.Render("j/k move  1-9 jump  enter select  " + m.prefixHint()))
+	keys := "j/k move  1-9 jump  enter select  "
+	if m.phase == phasePickSession {
+		keys = "j/k move  space toggle  1-9 jump  enter attach  "
+	}
+	b.WriteString(dimStyle.Render(keys + m.prefixHint()))
 	return b.String()
 }
 
@@ -1459,25 +1594,6 @@ func modelItems(names []string) []pickItem {
 		out = append(out, pickItem{ID: n, Title: n, Detail: "", Usable: true})
 	}
 	return out
-}
-
-func cursorSessionItems(picks []agent.CursorPick) []pickItem {
-	items := []pickItem{{
-		ID:     attachAllID,
-		Title:  "attach all",
-		Detail: fmt.Sprintf("%d sessions across open windows", len(picks)),
-		Usable: true,
-	}}
-	for _, p := range picks {
-		items = append(items, pickItem{
-			ID:     p.SessionID,
-			Title:  nz(p.Label, "cursor"),
-			Detail: ageSince(p.ModTime) + "  ·  " + nz(p.Preview, short(p.SessionID, 12)),
-			Meta:   p.Workspace,
-			Usable: true,
-		})
-	}
-	return items
 }
 
 func digitIndex(key string) int {
