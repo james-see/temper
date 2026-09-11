@@ -24,10 +24,7 @@ builds:
 archives:
   - id: temper
     name_template: "temper_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
-    files:
-      - src: temper
-        dst: temper
+    formats: [tar.gz]
 
 checksum:
   name_template: checksums.txt
@@ -37,10 +34,7 @@ release:
 
 brews:
   - name: temper
-    # Flip to false once a TAP_TOKEN secret exists (fine-grained PAT with
-    # Contents read/write on james-see/homebrew-tap). Until then the
-    # formula bump stays manual.
-    skip_upload: true
+    skip_upload: false
     repository:
       owner: james-see
       name: homebrew-tap
