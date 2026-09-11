@@ -1,0 +1,32 @@
+name: Release
+
+# Tag-based release: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+# Builds platform tarballs, publishes the GitHub release, and bumps the
+# homebrew-tap formula via GoReleaser. Needs the TAP_TOKEN secret
+# (fine-grained PAT with Contents read/write on james-see/homebrew-tap).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
