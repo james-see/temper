@@ -44,6 +44,12 @@ agents:
   opencode:
     type: opencode
 
+  muse:
+    type: muse
+
+  goose:
+    type: goose
+
   hermes:
     type: hermes
 

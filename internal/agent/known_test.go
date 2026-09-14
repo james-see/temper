@@ -21,6 +21,12 @@ func TestResolveKnownAndConfigured(t *testing.T) {
 	if !Implemented("opencode") || !IsExternal("opencode") || IsNative("opencode") {
 		t.Fatal("opencode flags")
 	}
+	if !Implemented("muse") || !IsExternal("muse") || TypeOf("muse-code") != "muse" {
+		t.Fatal("muse flags")
+	}
+	if !Implemented("goose") || !IsExternal("goose") || TypeOf("goose") != "goose" {
+		t.Fatal("goose flags")
+	}
 	if !Implemented("cursor") {
 		t.Fatal("cursor wired")
 	}

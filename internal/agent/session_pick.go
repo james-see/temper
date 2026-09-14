@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// SessionPick is one attachable live session from Cursor, Hermes, or OpenCode.
+// SessionPick is one attachable live session from Cursor, Hermes, OpenCode, Muse, or Goose.
 type SessionPick struct {
 	Agent     string
 	SessionID string
@@ -56,6 +56,8 @@ var (
 	probeCursor   = liveCursorSessionPicks
 	probeHermes   = liveHermesPicks
 	probeOpenCode = liveOpenCodePicks
+	probeMuse     = liveMusePicks
+	probeGoose    = liveGoosePicks
 )
 
 // LiveCursorSessionPicks lists Cursor composers as SessionPicks.
@@ -239,6 +241,71 @@ func liveOpenCodePicks(ctx context.Context) ([]SessionPick, error) {
 	return picks, nil
 }
 
+// LiveMusePicks lists Muse sessions whose session.jsonl is currently open by a muse process.
+// Disk history alone is ignored — no open log means no picks.
+func LiveMusePicks(ctx context.Context) ([]SessionPick, error) {
+	return liveMusePicks(ctx)
+}
+
+func liveMusePicks(ctx context.Context) ([]SessionPick, error) {
+	paths, err := findMuseOpenSessionLogs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var picks []SessionPick
+	seen := map[string]bool{}
+	for _, path := range paths {
+		id := filepath.Base(filepath.Dir(path))
+		if id == "" || id == "." || seen[id] {
+			continue
+		}
+		seen[id] = true
+		p := SessionPick{
+			Agent: "muse", SessionID: id, Label: shortSessionLabel(id), Preview: "muse",
+		}
+		if fi, e := os.Stat(path); e == nil {
+			p.ModTime = fi.ModTime()
+		}
+		picks = append(picks, p)
+	}
+	return picks, nil
+}
+
+var findMuseOpenSessionLogsFn = findMuseOpenSessionLogsOS
+
+func findMuseOpenSessionLogs(ctx context.Context) ([]string, error) {
+	return findMuseOpenSessionLogsFn(ctx)
+}
+
+func findMuseOpenSessionLogsOS(ctx context.Context) ([]string, error) {
+	out, err := defaultExec(ctx, "lsof", []string{"-nP", "-Fn", "-c", "muse"})
+	if err != nil {
+		return nil, nil
+	}
+	return parseMuseOpenSessionLogs(out), nil
+}
+
+func parseMuseOpenSessionLogs(out string) []string {
+	var paths []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "n") {
+			continue
+		}
+		path := strings.TrimPrefix(line, "n")
+		if !strings.HasSuffix(path, "session.jsonl") {
+			continue
+		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
+}
+
 var (
 	findOpenCodeListenAddrsFn = findOpenCodeListenAddrsOS
 	fetchOpenCodeSessionsFn   = fetchOpenCodeSessionsHTTP
@@ -356,7 +423,7 @@ func fetchOpenCodeSessionsHTTP(ctx context.Context, addr string) (string, error)
 	return string(body), nil
 }
 
-// LiveSessionPicks probes Cursor/Hermes/OpenCode in parallel.
+// LiveSessionPicks probes Cursor/Hermes/OpenCode/Muse in parallel.
 // filterAgent limits to one adapter type when non-empty (e.g. "opencode").
 // Missing binaries / Cursor-not-running yield empty groups, not errors.
 func LiveSessionPicks(ctx context.Context, filterAgent string) ([]SessionPick, error) {
@@ -401,6 +468,8 @@ func LiveSessionPicks(ctx context.Context, filterAgent string) ([]SessionPick, e
 	run("cursor", func(context.Context) ([]SessionPick, error) { return probeCursor() })
 	run("hermes", probeHermes)
 	run("opencode", probeOpenCode)
+	run("muse", probeMuse)
+	run("goose", probeGoose)
 	wg.Wait()
 
 	if filter == "cursor" && len(out) == 0 && cursorErr != nil {

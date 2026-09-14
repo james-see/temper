@@ -13,9 +13,12 @@ var Known = map[string]string{
 	"temper":      "temper",
 	"hermes":      "hermes",
 	"opencode":    "opencode",
+	"muse":        "muse",
+	"muse-code":   "muse",
 	"claude":      "claude-code",
 	"claude-code": "claude-code",
 	"codex":       "codex",
+	"goose":       "goose",
 	"cursor":      "cursor",
 }
 
@@ -37,7 +40,7 @@ func TypeOf(id string) string {
 
 func Implemented(id string) bool {
 	switch TypeOf(id) {
-	case "temper", "hermes", "cursor", "opencode":
+	case "temper", "hermes", "cursor", "opencode", "muse", "goose":
 		return true
 	default:
 		return false

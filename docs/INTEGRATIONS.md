@@ -6,6 +6,7 @@ Temper separates **agent runtimes**, **model providers**, **tools/protocols**, *
 
 | Agent | Priority | Notes |
 |---|---:|---|
+| Muse Code | P0 | Wired as Sidecar; session.jsonl poll + live attach in TUI picker |
 | OpenCode | P0 | Wired as Sidecar; live session attach in TUI picker |
 | Claude Code | P0 | First-class external coding-agent adapter |
 | OpenAI Codex | P0 | First-class external coding-agent adapter |
@@ -13,7 +14,7 @@ Temper separates **agent runtimes**, **model providers**, **tools/protocols**, *
 | Hermes Agent | P0 | Wired as Sidecar (session export + logs); live session attach |
 | Temper Native | P0 | Minimal native agent loop for direct provider execution |
 | Generic `exec` | P0 | Allows unsupported agent CLIs to be configured without a Temper release |
-| Goose | P1 | Community/first-party adapter candidate |
+| Goose | P0 | Wired as Sidecar (`goose run --interactive` launch, session export poll, TUI inject, `goose run --resume` fallback); recent-session attach in TUI picker |
 | Aider | P1 | Community/first-party adapter candidate |
 
 Agent adapters should expose capability metadata where available:

@@ -207,4 +207,3 @@ func ingestCursor(ev cursorconnect.Event) (Ingest, bool) {
 func IsInjectUnavailable(err error) bool {
 	return err != nil && errors.Is(err, cursorconnect.ErrInjectUnavailable)
 }
-

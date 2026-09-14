@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	earlyGrace      = 4
-	ThinkUncertain  = 2500
-	ThinkStalled    = 6000
+	earlyGrace     = 4
+	ThinkUncertain = 2500
+	ThinkStalled   = 6000
 )
 
 type Signals struct {

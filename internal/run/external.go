@@ -47,7 +47,7 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 	} else if _, err := side.Start(ctx, agent.TaskRequest{
 		RunID: id, Prompt: opts.Goal, Workspace: reqWS, Session: opts.CursorSession,
 	}); err != nil {
-		soft := (side.ID() == "hermes" || side.ID() == "opencode") && !strings.Contains(err.Error(), "PATH")
+		soft := (side.ID() == "hermes" || side.ID() == "opencode" || side.ID() == "muse" || side.ID() == "goose") && !strings.Contains(err.Error(), "PATH")
 		if soft {
 			m.debug("sidecar.start", "err", err.Error(), "cmd", side.LaunchLine(), "id", side.ID())
 		} else {
@@ -112,6 +112,10 @@ func (m *Manager) openSidecar(opts Options, dec arbiter.Decision) (agent.Sidecar
 		return agent.NewHermes(agentCommand(m.Cfg, dec.Selected.Agent, "hermes"), !opts.SkipSpawn), "session+logs", nil
 	case "opencode":
 		return agent.NewOpenCode(agentCommand(m.Cfg, dec.Selected.Agent, "opencode"), !opts.SkipSpawn), "session+logs", nil
+	case "muse":
+		return agent.NewMuse(agentCommand(m.Cfg, dec.Selected.Agent, "muse"), !opts.SkipSpawn), "session+logs", nil
+	case "goose":
+		return agent.NewGoose(agentCommand(m.Cfg, dec.Selected.Agent, "goose"), !opts.SkipSpawn), "session+logs", nil
 	case "cursor":
 		return m.openCursor(opts)
 	default:
@@ -194,6 +198,18 @@ func (m *Manager) startAttached(opts Options, t agent.SessionPick) (agent.Sideca
 			return nil, "", err
 		}
 		return o, "session+logs", nil
+	case "muse":
+		mu := agent.NewMuse(agentCommand(m.Cfg, t.Agent, "muse"), false)
+		if _, err := mu.Start(context.Background(), req); err != nil {
+			return nil, "", err
+		}
+		return mu, "session+logs", nil
+	case "goose":
+		g := agent.NewGoose(agentCommand(m.Cfg, t.Agent, "goose"), false)
+		if _, err := g.Start(context.Background(), req); err != nil {
+			return nil, "", err
+		}
+		return g, "session+logs", nil
 	default:
 		return nil, "", agent.UnimplementedError(t.Agent)
 	}
@@ -230,7 +246,7 @@ func resolveAttachTargets(opts Options, selectedAgent string) ([]agent.SessionPi
 			return nil, nil
 		}
 		typ := agent.TypeOf(selectedAgent)
-		if typ == "hermes" || typ == "opencode" {
+		if typ == "hermes" || typ == "opencode" || typ == "muse" || typ == "goose" {
 			return []agent.SessionPick{{
 				Agent: typ, SessionID: sess, Workspace: opts.CursorWorkspace,
 			}}, nil
@@ -259,7 +275,7 @@ func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
 	}
 	if sess != "" {
 		typ := agent.TypeOf(opts.Agent)
-		if typ == "hermes" || typ == "opencode" {
+		if typ == "hermes" || typ == "opencode" || typ == "muse" || typ == "goose" {
 			return nil, nil
 		}
 		if opts.CursorWorkspace != "" {

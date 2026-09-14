@@ -4,7 +4,7 @@ This file provides guidance for LLMs and human contributors working on the Tempe
 
 ## Project Overview
 
-Temper is an open-source adaptive control plane for coding agents. It supervises agents (like Cursor, Claude Code, Codex, OpenCode) by measuring progress, detecting stalls/loops, changing strategy, and verifying outcomes. It sits above the agents, not as another monolithic agent.
+Temper is an open-source adaptive control plane for coding agents. It supervises agents (like Cursor, Claude Code, Codex, OpenCode, Muse Code) by measuring progress, detecting stalls/loops, changing strategy, and verifying outcomes. It sits above the agents, not as another monolithic agent.
 
 Key components:
 - **Agent**: Native Go agent with shell, read, write, patch, search, git tools.
@@ -96,7 +96,7 @@ Temper is designed to supervise coding agents. When extending Temper:
 - Consider the reflex judge loop: Goal → Plan → Action → Observation → Progress evaluator → (progressing|uncertain|stalled|looping|regressing|complete).
 - The reflex judge is pluggable; defaults to heuristics + optional SLM.
 - Tool implementations live in `internal/agent/tools/` (shell, read, write, patch, search, git).
-- External agents use the Sidecar interface (Poll + Inject). Wired: Hermes, Cursor, OpenCode. Claude Code and Codex are next.
+- External agents use the Sidecar interface (Poll + Inject). Wired: Hermes, Cursor, OpenCode, Muse, Goose. Claude Code and Codex are next.
 
 ## Directory Structure
 ```
