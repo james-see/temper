@@ -96,7 +96,7 @@ Temper is designed to supervise coding agents. When extending Temper:
 - Consider the reflex judge loop: Goal → Plan → Action → Observation → Progress evaluator → (progressing|uncertain|stalled|looping|regressing|complete).
 - The reflex judge is pluggable; defaults to heuristics + optional SLM.
 - Tool implementations live in `internal/agent/tools/` (shell, read, write, patch, search, git).
-- External agents use the Sidecar interface (Poll + Inject). Wired: Hermes, Cursor, OpenCode, Muse, Goose. Claude Code and Codex are next.
+- External agents use the Sidecar interface (Poll + Inject). Wired: Hermes, Cursor, OpenCode, Muse, Goose, Claude Code, Codex. Continuity: `temper continue <run-id>`, prompt queue while busy, `switch_agent` handoff.
 
 ## Directory Structure
 ```

@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -358,11 +360,11 @@ func TestParseGooseSessionListTableFallback(t *testing.T) {
 
 func TestPickGooseUnseen(t *testing.T) {
 	seen := map[string]bool{"20260901_000000": true}
-	id, ok := pickGooseUnseen([]string{"20260901_000000", "20260908_110000", "20260908_120000"}, seen)
+	id, ok := pickGooseUnseen([]string{"20260901_000000", "20260908_110000", "20260908_120000"}, seen, time.Time{})
 	if !ok || id != "20260908_120000" {
 		t.Fatalf("%s %v", id, ok)
 	}
-	if _, ok := pickGooseUnseen([]string{"20260901_000000"}, seen); ok {
+	if _, ok := pickGooseUnseen([]string{"20260901_000000"}, seen, time.Time{}); ok {
 		t.Fatal("all seen")
 	}
 }
@@ -377,6 +379,69 @@ func TestParseGooseSessionPicksRecentOnly(t *testing.T) {
 	picks := parseGooseSessionPicks(out)
 	if len(picks) != 1 || picks[0].SessionID != "20260908_120000" || picks[0].Label != "fix auth" {
 		t.Fatalf("%+v", picks)
+	}
+}
+
+func TestParseGooseRealFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/goose/export.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ings, cur := parseGooseExport(string(raw), gooseCursor{})
+	if cur.n == 0 {
+		t.Fatal("expected messages")
+	}
+	var types []string
+	hasReq, hasDone, hasUser := false, false, false
+	for _, ing := range ings {
+		types = append(types, ing.Type)
+		switch ing.Type {
+		case "tool.requested":
+			hasReq = true
+		case "tool.completed":
+			hasDone = true
+		case "user.message":
+			hasUser = true
+		}
+	}
+	if !hasReq || !hasDone || !hasUser {
+		t.Fatalf("got %v", types)
+	}
+	jl, err := os.ReadFile("testdata/goose/export.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jings, _ := parseGooseExport(string(jl), gooseCursor{})
+	if len(jings) == 0 {
+		t.Fatal("jsonl produced no ingests")
+	}
+}
+
+func TestGooseInterruptTypes(t *testing.T) {
+	var typed []string
+	g := NewGoose("goose", false)
+	g.TypeTerm = func(text string) error {
+		typed = append(typed, text)
+		return nil
+	}
+	if err := g.Interrupt(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(typed) != 1 || typed[0] != "\x03" {
+		t.Fatalf("%q", typed)
+	}
+}
+
+func TestGooseInjectLiveOwner(t *testing.T) {
+	g := NewGoose("goose", false)
+	g.LookPath = func(string) (string, error) { return "/bin/goose", nil }
+	g.Bind("20260908_120000")
+	g.Exec = func(context.Context, string, []string) (string, error) {
+		return "", fmt.Errorf("goose: session already in use")
+	}
+	err := g.Inject(context.Background(), "replan")
+	if err == nil || !IsLiveOwner(err) {
+		t.Fatalf("%v", err)
 	}
 }
 

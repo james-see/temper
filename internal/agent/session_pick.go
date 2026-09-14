@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// SessionPick is one attachable live session from Cursor, Hermes, OpenCode, Muse, or Goose.
+// SessionPick is one attachable live session from Cursor, Hermes, OpenCode, Muse, Goose, or Claude Code.
 type SessionPick struct {
 	Agent     string
 	SessionID string
@@ -58,6 +58,8 @@ var (
 	probeOpenCode = liveOpenCodePicks
 	probeMuse     = liveMusePicks
 	probeGoose    = liveGoosePicks
+	probeClaude   = liveClaudePicks
+	probeCodex    = liveCodexPicks
 )
 
 // LiveCursorSessionPicks lists Cursor composers as SessionPicks.
@@ -423,7 +425,7 @@ func fetchOpenCodeSessionsHTTP(ctx context.Context, addr string) (string, error)
 	return string(body), nil
 }
 
-// LiveSessionPicks probes Cursor/Hermes/OpenCode/Muse in parallel.
+// LiveSessionPicks probes Cursor/Hermes/OpenCode/Muse/Goose/Claude Code in parallel.
 // filterAgent limits to one adapter type when non-empty (e.g. "opencode").
 // Missing binaries / Cursor-not-running yield empty groups, not errors.
 func LiveSessionPicks(ctx context.Context, filterAgent string) ([]SessionPick, error) {
@@ -470,6 +472,8 @@ func LiveSessionPicks(ctx context.Context, filterAgent string) ([]SessionPick, e
 	run("opencode", probeOpenCode)
 	run("muse", probeMuse)
 	run("goose", probeGoose)
+	run("claude-code", probeClaude)
+	run("codex", probeCodex)
 	wg.Wait()
 
 	if filter == "cursor" && len(out) == 0 && cursorErr != nil {

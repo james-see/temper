@@ -83,8 +83,13 @@ func (m *Muse) Start(_ context.Context, req TaskRequest) (Session, error) {
 	}
 	m.started = m.now()
 	m.argv = museLaunchArgs(req.Prompt, req.Session)
-	m.beginSnapshot()
 	if m.Spawn {
+		// Snapshot before spawn so the new session cannot be marked seen.
+		_ = m.snapshotIDs(context.Background())
+		if m.snapDone == nil {
+			m.snapDone = make(chan struct{})
+		}
+		m.snapOnce.Do(func() { close(m.snapDone) })
 		open := m.OpenTerm
 		if open == nil {
 			open = term.Open
@@ -97,6 +102,8 @@ func (m *Muse) Start(_ context.Context, req TaskRequest) (Session, error) {
 		if m.TypeTerm == nil && handle.CanType() {
 			m.TypeTerm = handle.Type
 		}
+	} else {
+		m.beginSnapshot()
 	}
 	return Session{ID: req.RunID}, nil
 }
@@ -199,13 +206,13 @@ func (m *Muse) Discover(ctx context.Context) (string, bool) {
 		return id, true
 	}
 	m.waitSnapshot(ctx)
-	rows, err := m.listSessions()
+	rows, err := scanMuseSessions(m.sessionsRoot())
 	if err != nil {
 		return "", false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	id, ok := pickMuseUnseen(rows, m.seenIDs)
+	id, ok := pickMuseDiscover(rows, m.seenIDs, m.started)
 	if !ok {
 		return "", false
 	}

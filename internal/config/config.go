@@ -192,6 +192,8 @@ func Defaults() Config {
 			"opencode": {Type: "opencode"},
 			"muse":     {Type: "muse"},
 			"goose":    {Type: "goose"},
+			"claude":   {Type: "claude-code"},
+			"codex":    {Type: "codex"},
 			"cursor":   {Type: "cursor"},
 		},
 		Reflex: Reflex{

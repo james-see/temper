@@ -49,6 +49,7 @@ temper debug                   # same as temper, verbose logs
 temper run --debug --plain "..." # events + slog on stderr
 TEMPER_DEBUG=1 temper run "..."
 temper inspect <run-id>
+temper continue <run-id>
 temper config show
 temper config path
 temper version
@@ -80,7 +81,9 @@ See [`examples/temper.yaml`](examples/temper.yaml). Data dir: `.temper/` in the 
 
 OpenAI-compatible (OpenAI, oMLX `localhost:8000`), Ollama `/api/chat`, Anthropic Messages, Gemini `generateContent`.
 
-External agents wired today: **native**, **Hermes**, **Cursor**, **OpenCode**, **Muse**, **Goose**. Plain `temper` scans live Cursor/Hermes/OpenCode/Muse/Goose sessions and offers a multi-select attach picker (space/enter/all); `temper opencode` (etc.) scopes to that agent.
+External agents wired today: **native**, **Hermes**, **Cursor**, **OpenCode**, **Muse**, **Goose**, **Claude Code**, **Codex**. Plain `temper` scans live Cursor/Hermes/OpenCode/Muse/Goose/Claude/Codex sessions and offers a multi-select attach picker (space/enter/all); `temper opencode` (etc.) scopes to that agent.
+
+Resume a supervised run after Temper restarts with `temper continue <run-id>`. While an external agent is busy, TUI follow-ups are queued and injected at the next turn boundary. Recovery can hand off via `switch_agent`.
 
 ## Reflex judge
 

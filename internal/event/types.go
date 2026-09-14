@@ -19,6 +19,7 @@ const (
 	AgentStarted   = "agent.started"
 	AgentStopped   = "agent.stopped"
 	AgentSwitched  = "agent.switched"
+	SidecarBound   = "sidecar.bound"
 	ModelCalled    = "model.called"
 	ModelThinking  = "model.thinking"
 	ModelCompleted = "model.completed"
@@ -29,6 +30,9 @@ const (
 	WorkspaceDiff      = "workspace.diff"
 	CheckpointCreated  = "checkpoint.created"
 	CheckpointRestored = "checkpoint.restored"
+
+	PromptQueued    = "prompt.queued"
+	PromptDelivered = "prompt.delivered"
 
 	TestExecuted        = "test.executed"
 	CompileExecuted     = "compile.executed"

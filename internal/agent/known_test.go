@@ -27,6 +27,12 @@ func TestResolveKnownAndConfigured(t *testing.T) {
 	if !Implemented("goose") || !IsExternal("goose") || TypeOf("goose") != "goose" {
 		t.Fatal("goose flags")
 	}
+	if !Implemented("claude") || !Implemented("claude-code") || TypeOf("claude") != "claude-code" {
+		t.Fatal("claude-code flags")
+	}
+	if !Implemented("codex") || !IsExternal("codex") || TypeOf("codex") != "codex" {
+		t.Fatal("codex flags")
+	}
 	if !Implemented("cursor") {
 		t.Fatal("cursor wired")
 	}

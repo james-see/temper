@@ -32,6 +32,18 @@ func TestSplitAgentArgs(t *testing.T) {
 	if err != nil || id != "muse-code" || goal != "ship" {
 		t.Fatalf("muse-code %s %q %v", id, goal, err)
 	}
+	id, goal, err = splitAgentArgs([]string{"claude", "fix", "auth"}, cfg, "")
+	if err != nil || id != "claude" || goal != "fix auth" {
+		t.Fatalf("claude %s %q %v", id, goal, err)
+	}
+	id, goal, err = splitAgentArgs([]string{"claude-code", "ship"}, cfg, "")
+	if err != nil || id != "claude-code" || goal != "ship" {
+		t.Fatalf("claude-code %s %q %v", id, goal, err)
+	}
+	id, goal, err = splitAgentArgs([]string{"codex", "fix", "auth"}, cfg, "")
+	if err != nil || id != "codex" || goal != "fix auth" {
+		t.Fatalf("codex %s %q %v", id, goal, err)
+	}
 	id, goal, err = splitAgentArgs([]string{"native", "do", "it"}, cfg, "")
 	if err != nil || id != "native" || goal != "do it" {
 		t.Fatalf("%s %q %v", id, goal, err)

@@ -62,6 +62,7 @@ func root() *cobra.Command {
 
 	cmd.AddCommand(runCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session))
 	cmd.AddCommand(debugCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session))
+	cmd.AddCommand(continueCmd(&plain, &debug, &cfgPath))
 	cmd.AddCommand(inspectCmd(&plain, &cfgPath))
 	cmd.AddCommand(configCmd(&cfgPath))
 	cmd.AddCommand(versionCmd())
@@ -90,6 +91,53 @@ func debugCmd(plain, debug *bool, cfgPath, agent, prov, model, session *string) 
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), args, config.Flags{
 				Plain: *plain, Debug: true, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model, Session: *session,
+			})
+		},
+	}
+}
+
+func continueCmd(plain, debug *bool, cfgPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "continue <run-id>",
+		Short: "Resume a non-terminal Temper run after restart",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loaded, err := config.Load(config.Flags{Plain: *plain, Debug: *debug, Config: *cfgPath})
+			if err != nil {
+				return err
+			}
+			root, err := loaded.Config.WorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			if *debug || os.Getenv("TEMPER_DEBUG") != "" {
+				_, _ = debuglog.Setup(root, true)
+			}
+			mgr, err := run.Open(loaded.Config, root)
+			if err != nil {
+				return err
+			}
+			defer mgr.Close()
+			runCtx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			if *plain || !isTTY() {
+				go printLive(runCtx, mgr)
+				r, err := mgr.Continue(runCtx, args[0])
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stdout, "continued %s state=%s agent=%s\n", r.ID, r.State, r.Agent)
+				return nil
+			}
+			go func() {
+				_, _ = mgr.Continue(runCtx, args[0])
+			}()
+			return tui.Run(tui.Options{
+				Hub: mgr.Hub, Cancel: cancel,
+				OnFollow: func(text string) {
+					go func() { _ = mgr.EnqueuePrompt(runCtx, text) }()
+				},
+				OnMode: mgr.ToggleReflexMode, OnApprove: mgr.ApproveRecovery,
 			})
 		},
 	}
@@ -258,6 +306,18 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 					fmt.Fprintf(os.Stdout, "  # or: goose run --interactive --text %q", goal)
 				}
 				fmt.Fprintln(os.Stdout)
+			case "claude-code":
+				fmt.Fprintf(os.Stdout, "open a terminal in %s and run:\n  claude", root)
+				if strings.TrimSpace(goal) != "" {
+					fmt.Fprintf(os.Stdout, " %q", goal)
+				}
+				fmt.Fprintln(os.Stdout)
+			case "codex":
+				fmt.Fprintf(os.Stdout, "open a terminal in %s and run:\n  codex", root)
+				if strings.TrimSpace(goal) != "" {
+					fmt.Fprintf(os.Stdout, " %q", goal)
+				}
+				fmt.Fprintln(os.Stdout)
 			default:
 				fmt.Fprintf(os.Stdout, "open a terminal and run:\n  hermes --tui --in %s --source temper\n", root)
 				if strings.TrimSpace(goal) != "" {
@@ -275,7 +335,7 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 				opts.AttachTargets = picks
 				opts.CursorAttachAll = false
 				opts.CursorSession = ""
-			} else if sess != "" && !all && (agent.TypeOf(flags.Agent) == "hermes" || agent.TypeOf(flags.Agent) == "opencode" || agent.TypeOf(flags.Agent) == "muse" || agent.TypeOf(flags.Agent) == "goose") {
+			} else if sess != "" && !all && (agent.TypeOf(flags.Agent) == "hermes" || agent.TypeOf(flags.Agent) == "opencode" || agent.TypeOf(flags.Agent) == "muse" || agent.TypeOf(flags.Agent) == "goose" || agent.TypeOf(flags.Agent) == "claude-code" || agent.TypeOf(flags.Agent) == "codex") {
 				opts.AttachTargets = []agent.SessionPick{{
 					Agent: agent.TypeOf(flags.Agent), SessionID: sess,
 				}}
@@ -344,7 +404,9 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 	}
 	follow := func(text string) {
 		go func() {
-			_, _ = mgr.Followup(runCtx, text)
+			if err := mgr.EnqueuePrompt(runCtx, text); err != nil {
+				_, _ = mgr.Followup(runCtx, text)
+			}
 		}()
 	}
 

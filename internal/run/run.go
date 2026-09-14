@@ -110,6 +110,10 @@ type Options struct {
 	CursorAttachAll bool
 	CursorTargets   []agent.CursorPick
 	AttachTargets   []agent.SessionPick
+	// Continuing resumes an existing Temper run (no CreateRun).
+	Continuing bool
+	// LadderAttempts restores recovery ladder progress on continue.
+	LadderAttempts map[string]int
 }
 
 type pendingRec struct {
@@ -141,6 +145,8 @@ type session struct {
 	approve     chan struct{}
 	mode        string
 	thinkChars  int
+	prompts     []string // user prompts queued while sidecar is busy
+	toolOpen    int      // outstanding tool.requested without completed
 }
 
 type Manager struct {
@@ -153,6 +159,8 @@ type Manager struct {
 	seq         uint64
 	rec         store.Run
 	sess        *session
+	// handoffSidecar, when set (tests), supplies the next sidecar for switch_agent.
+	handoffSidecar func(id string) agent.Sidecar
 }
 
 func Open(cfg config.Config, root string) (*Manager, error) {
@@ -832,7 +840,7 @@ func sidecarRecovery(cfg config.Config) []string {
 func filterRecovery(cfg config.Config, sidecar bool) []string {
 	var out []string
 	for _, s := range cfg.Reflex.Recovery {
-		if sidecar && (s.Action == "switch_model" || s.Action == "switch_agent") {
+		if sidecar && s.Action == "switch_model" {
 			continue
 		}
 		out = append(out, s.Action)

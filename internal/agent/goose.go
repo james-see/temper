@@ -97,8 +97,15 @@ func (g *Goose) Start(_ context.Context, req TaskRequest) (Session, error) {
 	}
 	g.started = g.now()
 	g.argv = gooseLaunchArgs(req.Prompt, req.Model)
-	g.beginSnapshot()
 	if g.Spawn {
+		_ = g.snapshotIDs(context.Background())
+		if g.snapDone == nil {
+			g.snapDone = make(chan struct{})
+		}
+		g.mu.Lock()
+		g.snapBegun = true
+		g.mu.Unlock()
+		g.snapOnce.Do(func() { close(g.snapDone) })
 		open := g.OpenTerm
 		if open == nil {
 			open = term.Open
@@ -111,6 +118,8 @@ func (g *Goose) Start(_ context.Context, req TaskRequest) (Session, error) {
 		if g.TypeTerm == nil && handle.CanType() {
 			g.TypeTerm = handle.Type
 		}
+	} else {
+		g.beginSnapshot()
 	}
 	return Session{ID: req.RunID}, nil
 }
@@ -148,7 +157,17 @@ func (g *Goose) Resume(_ context.Context, id string) (Session, error) {
 	return Session{ID: g.SessionID()}, nil
 }
 
-func (g *Goose) Interrupt(context.Context, string) error { return nil }
+func (g *Goose) Interrupt(context.Context, string) error {
+	// Ctrl-C interrupts the current Goose TUI turn when Temper owns the pty.
+	sig := "\x03"
+	if g.TypeTerm != nil {
+		return g.TypeTerm(sig)
+	}
+	if g.term != nil && g.term.CanType() {
+		return g.term.Type(sig)
+	}
+	return nil
+}
 
 func (g *Goose) Events(context.Context, string) (<-chan Event, error) {
 	return nil, fmt.Errorf("use Poll")
@@ -213,7 +232,7 @@ func (g *Goose) Discover(ctx context.Context) (string, bool) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	id, ok := pickGooseUnseen(ids, g.seenIDs)
+	id, ok := pickGooseUnseen(ids, g.seenIDs, g.started)
 	if !ok {
 		return "", false
 	}

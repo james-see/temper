@@ -1,0 +1,178 @@
+{
+  "id": "fixture-session",
+  "working_dir": "/Users/user/p/temper",
+  "conversation": [
+    {
+      "id": "msg_68908d01-e3b6-4f5b-8d63-3220d44ff382",
+      "role": "user",
+      "created": 1788662152,
+      "content": [
+        {
+          "type": "text",
+          "text": "use the apple-events extension and get the calendar items for monday please"
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true
+      }
+    },
+    {
+      "id": "chatcmpl-831",
+      "role": "assistant",
+      "created": 1788662394,
+      "content": [
+        {
+          "type": "text",
+          "text": "I'll help you get the calendar items for Monday. First, let me check what's available in the apple-events extension, and figure out which Monday. Today (2026-09-05) is a Saturday, so Monday would be **2026-09-07**.\n\nLet me inspect the available functions:"
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true,
+        "inference": {
+          "provider": "ollama",
+          "requestedModel": "qwen3.8:27b-mlx"
+        },
+        "usage": {
+          "inputTokens": 7742,
+          "outputTokens": 208,
+          "totalTokens": 7950,
+          "cacheReadTokens": 2,
+          "elapsedMs": 246615,
+          "timeToFirstTokenMs": 241753
+        }
+      }
+    },
+    {
+      "id": "msg_20c013c4-b993-416a-ab88-878c72447c0b",
+      "role": "assistant",
+      "created": 1788662399,
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The user wants me to use the apple-events extension to get calendar items for Monday. First, I need to figure out what \"Monday\" means - the current time is 2026-09-05 22:35:00 -04:00, which is a Saturday. So Monday would be 2026-09-07.\n\nLet me first check what functions are available in the apple-ev\u2026",
+          "signature": ""
+        },
+        {
+          "type": "toolRequest",
+          "id": "call_32arl2ro",
+          "toolCall": {
+            "status": "success",
+            "value": {
+              "name": "list_functions",
+              "arguments": {
+                "namespace": "AppleEvents"
+              }
+            }
+          },
+          "_meta": {
+            "goose.toolCall.providerIndex": 0,
+            "goose_extension": "code_execution"
+          }
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true,
+        "inference": {
+          "provider": "ollama",
+          "requestedModel": "qwen3.8:27b-mlx"
+        }
+      }
+    },
+    {
+      "id": "msg_b51b9050-2b81-4e16-8c22-a9d17b7d7d05",
+      "role": "user",
+      "created": 1788662399,
+      "content": [
+        {
+          "type": "toolResponse",
+          "id": "call_32arl2ro",
+          "toolResult": {
+            "status": "success",
+            "value": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "/**\n *\n */\nnamespace Songid {\n  /**\n   * Check if songid dependencies (fpcalc, ffmpeg, API key) are installed and configured.\n   */\n  export async function (input: { [key: string]: any | undefined } = {}): Promise<any>\n}\n\n/**\n *\n */\nnamespace Chromedevtools {\n  /**\n   * Clicks on the provided elemen\u2026"
+                }
+              ],
+              "isError": false
+            }
+          }
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true
+      }
+    },
+    {
+      "id": "msg_4b21c0df-c148-4517-9fc5-853f9a49d582",
+      "role": "assistant",
+      "created": 1788662473,
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The user wants calendar items for \"Monday\" using the AppleEvents extension. Today is Sunday 2026-09-05. So Monday is 2026-09-06. Let me check the calendarEvents function signature.",
+          "signature": ""
+        },
+        {
+          "type": "toolRequest",
+          "id": "call_2itox0bp",
+          "toolCall": {
+            "status": "success",
+            "value": {
+              "name": "get_function_details",
+              "arguments": {
+                "functions": [
+                  "Appleevents.calendarEvents"
+                ]
+              }
+            }
+          },
+          "_meta": {
+            "goose.toolCall.providerIndex": 0,
+            "goose_extension": "code_execution"
+          }
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true,
+        "inference": {
+          "provider": "ollama",
+          "requestedModel": "qwen3.8:27b-mlx"
+        }
+      }
+    },
+    {
+      "id": "msg_b6ac9c2b-9b7d-4335-ab36-b76c7e84de3f",
+      "role": "user",
+      "created": 1788662473,
+      "content": [
+        {
+          "type": "toolResponse",
+          "id": "call_2itox0bp",
+          "toolResult": {
+            "status": "success",
+            "value": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "/**\n *\n */\nnamespace Appleevents {\n  export type CalendarEventsInput = {\n    /**\n     * The operation to perform.\n     */\n    action: \"read\" | \"create\" | \"update\" | \"delete\";\n    /**\n     * The unique identifier of the event (REQUIRED for update, delete; optional for read to get single event).\n     \u2026"
+                }
+              ],
+              "isError": false
+            }
+          }
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true
+      }
+    }
+  ]
+}

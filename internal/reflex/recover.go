@@ -8,16 +8,9 @@ type Ladder struct {
 
 func NewLadder(actions []string) *Ladder {
 	if len(actions) == 0 {
-		actions = []string{"replan", "critic", "switch_model", "human"}
+		actions = []string{"replan", "critic", "switch_model", "switch_agent", "human"}
 	}
-	filtered := make([]string, 0, len(actions))
-	for _, a := range actions {
-		if a == "switch_agent" {
-			continue
-		}
-		filtered = append(filtered, a)
-	}
-	return &Ladder{Steps: filtered, Attempts: map[string]int{}, MaxEach: 1}
+	return &Ladder{Steps: append([]string(nil), actions...), Attempts: map[string]int{}, MaxEach: 1}
 }
 
 func (l *Ladder) Next() (string, bool) {

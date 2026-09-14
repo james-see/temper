@@ -335,7 +335,14 @@ func (m *Model) layout() {
 }
 
 func (m Model) canReply() bool {
-	return m.phase == phaseDone && !m.inspect && !m.external
+	if m.inspect {
+		return false
+	}
+	// External runs accept follow-ups while executing (queued to the sidecar).
+	if m.external {
+		return m.phase == phaseRunning || m.phase == phaseDone
+	}
+	return m.phase == phaseDone
 }
 
 func (m *Model) armReply() {

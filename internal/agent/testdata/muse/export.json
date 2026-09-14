@@ -1,0 +1,480 @@
+{
+  "events": [
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "0ded70d2-699c-5eb4-bd37-0dace60ef7cb",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 8,
+        "recorded_at": 1789148159749039,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "85a63581-0a30-4761-a237-20e0709f91c9",
+        "payload_type": "runtime.session.task",
+        "payload_schema_version": 1,
+        "payload": {
+          "task_id": "23983d53-314c-507b-9036-fb0cb6358252",
+          "event": {
+            "kind": "proposed",
+            "task_id": "23983d53-314c-507b-9036-fb0cb6358252",
+            "task_kind": "mcp.startup"
+          }
+        }
+      },
+      "kind": "proposed"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "23544c38-203a-56f3-9f7d-3a735fd0c2de",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 14,
+        "recorded_at": 1789148159776585,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "85a63581-0a30-4761-a237-20e0709f91c9",
+        "payload_type": "runtime.session.task",
+        "payload_schema_version": 1,
+        "payload": {
+          "task_id": "23983d53-314c-507b-9036-fb0cb6358252",
+          "event": {
+            "kind": "side_effect_intent",
+            "task_id": "23983d53-314c-507b-9036-fb0cb6358252",
+            "operation": "mcp.startup.batch",
+            "idempotency_key": "mcp.startup:85a63581-0a30-4761-a237-20e0709f91c9",
+            "policy_decision": "allow:mcp_configuration_admitted",
+            "cancellation_handle": "runtime-task:23983d53-314c-507b-9036-fb0cb6358252",
+            "parent_task_id": null
+          }
+        }
+      },
+      "kind": "side_effect_intent"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "f96c6f68-6a89-4f4c-bd63-a780c2491381",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 20,
+        "recorded_at": 1789148161697364,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "2e2460f6-7cff-449b-8bcd-7bb041eb8ee8",
+        "payload_type": "runtime.session.task",
+        "payload_schema_version": 1,
+        "payload": {
+          "task_id": "0a952c64-dce3-4f3f-8510-91081b8323d9",
+          "event": {
+            "kind": "proposed",
+            "task_id": "0a952c64-dce3-4f3f-8510-91081b8323d9",
+            "task_kind": "session_name.allocate"
+          }
+        }
+      },
+      "kind": "proposed"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "661bf5dc-d60f-492c-836d-7c84f64418aa",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 23,
+        "recorded_at": 1789148161717510,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session.task",
+        "payload_schema_version": 1,
+        "payload": {
+          "task_id": "0a952c64-dce3-4f3f-8510-91081b8323d9",
+          "event": {
+            "kind": "side_effect_intent",
+            "task_id": "0a952c64-dce3-4f3f-8510-91081b8323d9",
+            "operation": "session_name.allocate",
+            "idempotency_key": "31261498-a89b-43e8-9ca5-6b1bada353d5",
+            "policy_decision": "not_applicable",
+            "cancellation_handle": "runtime-task:0a952c64-dce3-4f3f-8510-91081b8323d9",
+            "parent_task_id": null
+          }
+        }
+      },
+      "kind": "side_effect_intent"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "448a10d3-d426-44da-9069-cdbb93978825",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 49,
+        "recorded_at": 1789148198792374,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "task_id": "01a0918a-f782-7ed3-9f96-89210b7fcce4",
+          "event": {
+            "kind": "proposed",
+            "task_id": "01a0918a-f782-7ed3-9f96-89210b7fcce4",
+            "task_kind": "reminder.agent.skill-reminder"
+          }
+        }
+      },
+      "kind": "proposed"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "b3c78e63-178d-4e40-a090-4c67f45712a1",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 52,
+        "recorded_at": 1789148198809291,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "task_id": "01a0918a-f782-7ed3-9f96-89210b7fcce4",
+          "event": {
+            "kind": "side_effect_intent",
+            "task_id": "01a0918a-f782-7ed3-9f96-89210b7fcce4",
+            "operation": "reminder.child_run",
+            "idempotency_key": "reminder_child:skill-reminder:1",
+            "policy_decision": "reminder_child:read_only:subagent_tool_auto_approval",
+            "cancellation_handle": null,
+            "parent_task_id": null
+          }
+        }
+      },
+      "kind": "side_effect_intent"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "65588843-1155-4fbd-bac9-dca54672dbf1",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 66,
+        "recorded_at": 1789148207260398,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "event": {
+            "kind": "model_response_created",
+            "response_id": "resp_6aa43c2e1e38884633ad450c"
+          },
+          "source_run_record_id": "55a4d8ac-bc91-46d0-b480-f48d2923bf2e",
+          "source_run_record_sequence": 18
+        }
+      },
+      "kind": "model_response_created"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "38932321-929f-48ae-a50a-337a8e8b6de8",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 67,
+        "recorded_at": 1789148207267450,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "event": {
+            "kind": "reasoning_committed",
+            "message_id": "07deb0cd-a09c-429d-b6d9-b22a84a55850",
+            "response_id": "resp_6aa43c2e1e38884633ad450c",
+            "text": "",
+            "provider_item_id": "rs_6aa43c2e1e38884633ad450c:rs_01a0918b15a17260b0e188fe6050e186",
+            "encrypted_content": "Q-PaDgFIHwtbf7YQ64lQahA-LbwPW8kHzr7tWo7OULI_tjrduZzvV4x9bUAtN855u5vBVxSfSx5kySfq7QjdKeHn9TQMSshoiuYsFmrxc8XPbQLrE65XeiWjkIq28KXgtOj-AA6EnFFjM-ps9RaooEzOCZEIjP_2d8P_xKQ12SKhyarieAVe5xNX26f-kPt2R81HUbobXScSxqnlgx1AQ0lk7zK29irtTBO8se2KMe90k6sB1H8KEVRfxjEo2eH0cewb7dTma1w_wjupYSthRjxhLbeHBqivc5yFMqoR7hvuG1wcJYWpjYPiPFR79OJBo0wSVtPOgGy9dwQ8S8JYAqKN72B8EJHjkjRqSqROpL6nKCDqfKseSVxy5LsHtrjX_KaR_0AsbSF4J4-d\u2026"
+          },
+          "source_run_record_id": "0c88f5af-e78d-4a92-9164-1e223d02c36e",
+          "source_run_record_sequence": 19
+        }
+      },
+      "kind": "reasoning_committed"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "7911d561-99a5-4d45-a6a8-0d7da3dc00f5",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 68,
+        "recorded_at": 1789148207432913,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "event": {
+            "kind": "reasoning_committed",
+            "message_id": "a915e477-97f1-482c-94a5-eb628e9279e1",
+            "response_id": "resp_6aa43c2e1e38884633ad450c",
+            "text": "",
+            "provider_item_id": "rs_6aa43c2e1e38884633ad450c:rs_01a0918b184b76d1966b2ef98e43a7ce",
+            "encrypted_content": "Q-PaDgHOosROLq7D6pzVx61chPkzNCEAw2FeZAKyNsxjl0UgRyUNx1Mtd6SuNmRlgjKT6wlk6-uoDGKmnEwp0GSihdwW1WN83OqxP59HAbAP3cf-x7w9mhULMVCr_VC5r902_BgxvbxTrEU5rtymgJxxSdXQj2sivPQTBjBvfJlrD5maFSQCNzH6F5iU40fkk07xz9707_GWuser8VrugzvqIS3D1r7eFM8wf0UbREYRrfuTphQjHWSDkeytcXZQS7mjiqkOtkbkutO2pIBHTS3YW6kiPg1K20u3ula4pXHw_HqAoW7L7ElH7cACFtTyMhnGGMhsZXBtJnhd6vKc4Adp36J2xPpYtLqSjLh_-qEQl87aMjkcc6f8g5KKSmwvMJH3PnVnijZs5eGJ\u2026"
+          },
+          "source_run_record_id": "69abebe8-5908-4684-9cf7-506a8be7694a",
+          "source_run_record_sequence": 20
+        }
+      },
+      "kind": "reasoning_committed"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "f27f3ce3-4dca-4c48-a832-fe53c3207125",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 71,
+        "recorded_at": 1789148208037860,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "event": {
+            "kind": "model_completed",
+            "usage": {
+              "input_tokens": 57250,
+              "output_tokens": 188,
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "cache_read_tokens": 0,
+              "reasoning_tokens": 67
+            },
+            "duration_ms": 9127,
+            "finish_reason": "tool_calls",
+            "model": "muse-spark-1.3-contributor"
+          },
+          "source_run_record_id": "dd32aa6a-ea2c-4783-a0cc-a88cb689b2ae",
+          "source_run_record_sequence": 22
+        }
+      },
+      "kind": "model_completed"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "f9d527f2-510d-4c23-856e-e479ef22b19d",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 73,
+        "recorded_at": 1789148208054582,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "event": {
+            "kind": "assistant_tool_calls_committed",
+            "message_id": "ed550c0b-3430-4442-86be-f1906a8db698",
+            "response_id": "resp_6aa43c2e1e38884633ad450c",
+            "tool_calls": [
+              {
+                "id": "fc_01a0918b18d278c1a0cec1cd658f3eba",
+                "call_id": "call_01a0918b18d278c1a0cec1cd658f3eba",
+                "name": "bash",
+                "args": "{\"command\":\"ls -R docs 2>/dev/null; echo ---; ls *.md; echo ---; ls examples/ 2>/dev/null\",\"description\":\"List plan docs and repo root\"}"
+              }
+            ]
+          },
+          "source_run_record_id": "08e4d2f4-a06f-4ccd-a62b-df37a33399df",
+          "source_run_record_sequence": 23
+        }
+      },
+      "kind": "assistant_tool_calls_committed"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "1653fd8f-d589-477e-9107-f856253b390f",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 80,
+        "recorded_at": 1789148208105939,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "tool_batch.effect.started",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "tool_batch_effect",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "record": {
+            "kind": "started",
+            "effect_id": "01a0918b-1bbe-79f2-9091-4e783977bb22",
+            "model_call_index": 0,
+            "task_id": "01a0918b-1bbe-79f2-9091-4e783977bb22",
+            "task_stream": {
+              "kind": "task",
+              "id": "01a0918b-1bbe-79f2-9091-4e783977bb22"
+            },
+            "call_id": "call_01a0918b18d278c1a0cec1cd658f3eba",
+            "tool_name": "bash",
+            "parallel_profile": {
+              "kind": "ineligible"
+            }
+          }
+        }
+      },
+      "kind": null
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "f0394e0d-46dd-4d0a-8044-18cc6073def1",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 85,
+        "recorded_at": 1789148208160099,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "tool_batch.effect.terminal",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "tool_batch_effect",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "record": {
+            "kind": "terminal",
+            "effect_id": "01a0918b-1bbe-79f2-9091-4e783977bb22",
+            "model_call_index": 0,
+            "task_id": "01a0918b-1bbe-79f2-9091-4e783977bb22",
+            "task_stream": {
+              "kind": "task",
+              "id": "01a0918b-1bbe-79f2-9091-4e783977bb22"
+            },
+            "call_id": "call_01a0918b18d278c1a0cec1cd658f3eba",
+            "outcome": {
+              "kind": "completed",
+              "task_completion": {
+                "kind": "terminal",
+                "terminal": {
+                  "kind": "completed"
+                }
+              },
+              "output_ref_count": 0
+            }
+          }
+        }
+      },
+      "kind": null
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "7987f595-3129-4226-bb6e-b78ae7a6ed3c",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 86,
+        "recorded_at": 1789148208165108,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "task_id": "01a0918b-1bbe-79f2-9091-4e783977bb22",
+          "event": {
+            "kind": "output",
+            "task_id": "01a0918b-1bbe-79f2-9091-4e783977bb22",
+            "chunk": "{\n  \"chunk_id\": \"exec-1-1\",\n  \"command\": \"ls -R docs 2>/dev/null; echo ---; ls *.md; echo ---; ls examples/ 2>/dev/null\",\n  \"description\": \"List plan docs and repo root\",\n  \"exit_code\": 0,\n  \"terminal_status\": \"completed\",\n  \"output\": \"AGENTS_AND_PROVIDERS.md\\nARBITER.md\\nARCHITECTURE.md\\nEVENT_MODEL.md\\nINTEGRATIONS.md\\nPROJECT_PLAN.md\\nREFLEX.md\\nROADMAP.md\\nSELF_IMPROVEMENT.md\\nSWOT.md\\n---\\nAG\u2026",
+            "final_result": true
+          }
+        }
+      },
+      "kind": "output"
+    },
+    {
+      "envelope": {
+        "schema_version": 1,
+        "id": "ec54c462-bf5a-4e28-8eb2-5ba7905bbd03",
+        "stream": {
+          "kind": "session",
+          "id": "01a0918a-5dd9-7af2-9cc2-7dd0f97aeb84"
+        },
+        "sequence": 110,
+        "recorded_at": 1789148211183604,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": null,
+        "payload_type": "runtime.session",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run",
+          "run_id": "d1a0c14d-f8dc-4733-bbdd-8b6343abab84",
+          "event": {
+            "kind": "model_response_created",
+            "response_id": "resp_6aa43c3202be6574549d4d31"
+          },
+          "source_run_record_id": "259cf9ed-21c6-4a54-8fc8-6b84150eebb5",
+          "source_run_record_sequence": 35
+        }
+      },
+      "kind": "model_response_created"
+    }
+  ]
+}

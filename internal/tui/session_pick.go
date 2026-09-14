@@ -39,7 +39,7 @@ func sessionPickerItems(picks []agent.SessionPick, filterAgent string, unified b
 		ID: attachAllID, Title: "attach all", Kind: kindAttachAll, Usable: true,
 		Detail: fmt.Sprintf("%d sessions", len(picks)),
 	})
-	order := []string{"cursor", "hermes", "opencode", "muse", "goose"}
+	order := []string{"cursor", "hermes", "opencode", "muse", "goose", "claude-code", "codex"}
 	byAgent := map[string][]agent.SessionPick{}
 	for _, p := range picks {
 		a := agent.TypeOf(p.Agent)

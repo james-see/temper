@@ -93,9 +93,9 @@ func TestParseOpenCodeSessionPicks(t *testing.T) {
 }
 
 func TestLiveSessionPicksFilterAndEmpty(t *testing.T) {
-	oldC, oldH, oldO, oldM := probeCursor, probeHermes, probeOpenCode, probeMuse
+	oldC, oldH, oldO, oldM, oldG, oldCl, oldCx := probeCursor, probeHermes, probeOpenCode, probeMuse, probeGoose, probeClaude, probeCodex
 	defer func() {
-		probeCursor, probeHermes, probeOpenCode, probeMuse = oldC, oldH, oldO, oldM
+		probeCursor, probeHermes, probeOpenCode, probeMuse, probeGoose, probeClaude, probeCodex = oldC, oldH, oldO, oldM, oldG, oldCl, oldCx
 	}()
 
 	probeCursor = func() ([]SessionPick, error) {
@@ -108,6 +108,15 @@ func TestLiveSessionPicksFilterAndEmpty(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 	probeMuse = func(context.Context) ([]SessionPick, error) {
+		return nil, nil
+	}
+	probeGoose = func(context.Context) ([]SessionPick, error) {
+		return nil, nil
+	}
+	probeClaude = func(context.Context) ([]SessionPick, error) {
+		return nil, nil
+	}
+	probeCodex = func(context.Context) ([]SessionPick, error) {
 		return nil, nil
 	}
 
@@ -125,14 +134,17 @@ func TestLiveSessionPicksFilterAndEmpty(t *testing.T) {
 }
 
 func TestLiveSessionPicksCursorErrorWhenFiltered(t *testing.T) {
-	oldC, oldH, oldO, oldM := probeCursor, probeHermes, probeOpenCode, probeMuse
+	oldC, oldH, oldO, oldM, oldG, oldCl, oldCx := probeCursor, probeHermes, probeOpenCode, probeMuse, probeGoose, probeClaude, probeCodex
 	defer func() {
-		probeCursor, probeHermes, probeOpenCode, probeMuse = oldC, oldH, oldO, oldM
+		probeCursor, probeHermes, probeOpenCode, probeMuse, probeGoose, probeClaude, probeCodex = oldC, oldH, oldO, oldM, oldG, oldCl, oldCx
 	}()
 	probeCursor = func() ([]SessionPick, error) { return nil, errNotRunning("cursor closed") }
 	probeHermes = func(context.Context) ([]SessionPick, error) { return nil, nil }
 	probeOpenCode = func(context.Context) ([]SessionPick, error) { return nil, nil }
 	probeMuse = func(context.Context) ([]SessionPick, error) { return nil, nil }
+	probeGoose = func(context.Context) ([]SessionPick, error) { return nil, nil }
+	probeClaude = func(context.Context) ([]SessionPick, error) { return nil, nil }
+	probeCodex = func(context.Context) ([]SessionPick, error) { return nil, nil }
 
 	_, err := LiveSessionPicks(context.Background(), "cursor")
 	if err == nil || !strings.Contains(err.Error(), "cursor") {

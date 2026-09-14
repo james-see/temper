@@ -185,10 +185,29 @@ func gooseMessage(raw map[string]any) []Ingest {
 	case "system", "session_meta", "":
 		return nil
 	case "user", "human":
-		if text := gooseTextBlocks(raw); text != "" {
-			return []Ingest{{Type: "user.message", Data: map[string]any{"text": text}}}
+		// Real Goose exports put toolResponse (and sometimes permission) blocks
+		// on user-role turns after the model requested a tool.
+		var out []Ingest
+		for _, item := range gooseBlockOf(raw) {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch gooseBlockKind(block) {
+			case "toolresponse", "tool_response":
+				out = append(out, gooseToolResponseIngest(block))
+			case "permission", "approval", "permissionrequest", "permission_request":
+				msg := firstString(block, "message", "text", "prompt")
+				if msg == "" {
+					msg = "approval pending"
+				}
+				out = append(out, Ingest{Type: "user.message", Data: map[string]any{"text": msg, "kind": "approval"}})
+			}
 		}
-		return nil
+		if text := gooseTextBlocks(raw); text != "" {
+			out = append(out, Ingest{Type: "user.message", Data: map[string]any{"text": text}})
+		}
+		return out
 	case "tool":
 		name := firstString(raw, "tool_name", "name", "tool")
 		if name == "" {
@@ -261,6 +280,12 @@ func gooseToolRequestIngest(block map[string]any) (Ingest, bool) {
 func gooseToolNameArgs(call map[string]any) (string, string) {
 	if call == nil {
 		return "", ""
+	}
+	// Goose often wraps the call as {status, value:{name, arguments}}.
+	if v, ok := call["value"].(map[string]any); ok {
+		if name, args := gooseToolNameArgs(v); name != "" {
+			return name, args
+		}
 	}
 	if name := firstString(call, "name", "tool"); name != "" {
 		return name, gooseArgsString(call["arguments"])
@@ -387,30 +412,41 @@ func gooseSameWorkspace(a, b string) bool {
 }
 
 // pickGooseUnseen picks the newest unseen session by the timestamp embedded
-// in the ID; sessions without a parsable timestamp fall back to list order.
-func pickGooseUnseen(ids []string, seen map[string]bool) (string, bool) {
-	var best string
-	var bestT time.Time
-	var have bool
-	for _, id := range ids {
-		if seen[id] {
-			continue
-		}
-		t, ok := gooseStartedAt(id)
-		if !ok {
-			if best == "" {
-				best = id
+// in the ID; prefers sessions started at/after `since` when parsable.
+func pickGooseUnseen(ids []string, seen map[string]bool, since time.Time) (string, bool) {
+	pick := func(requireAfter bool) (string, bool) {
+		var best string
+		var bestT time.Time
+		var have bool
+		for _, id := range ids {
+			if seen[id] {
+				continue
 			}
-			continue
+			t, ok := gooseStartedAt(id)
+			if requireAfter && !since.IsZero() {
+				if !ok || t.Before(since) {
+					continue
+				}
+			}
+			if !ok {
+				if best == "" {
+					best = id
+				}
+				continue
+			}
+			if !have || t.After(bestT) {
+				best, bestT, have = id, t, true
+			}
 		}
-		if !have || t.After(bestT) {
-			best, bestT, have = id, t, true
+		if best == "" {
+			return "", false
 		}
+		return best, true
 	}
-	if best == "" {
-		return "", false
+	if id, ok := pick(true); ok {
+		return id, true
 	}
-	return best, true
+	return pick(false)
 }
 
 func gooseStartedAt(id string) (time.Time, bool) {

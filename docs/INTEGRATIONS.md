@@ -6,15 +6,15 @@ Temper separates **agent runtimes**, **model providers**, **tools/protocols**, *
 
 | Agent | Priority | Notes |
 |---|---:|---|
-| Muse Code | P0 | Wired as Sidecar; session.jsonl poll + live attach in TUI picker |
+| Muse Code | P0 | Wired as Sidecar; session.jsonl poll + live attach. Approvals surface as `waiting_human`; live-owner inject conflicts classify as `live_owner`. Discover snapshots before spawn to avoid binding races. |
 | OpenCode | P0 | Wired as Sidecar; live session attach in TUI picker |
-| Claude Code | P0 | First-class external coding-agent adapter |
-| OpenAI Codex | P0 | First-class external coding-agent adapter |
+| Claude Code | P0 | Wired as Sidecar; `~/.claude/projects` transcript poll, `claude -p --resume` inject, live attach via `claude agents --json` + recent jsonl |
+| OpenAI Codex | P0 | Wired as Sidecar; `~/.codex/sessions` JSONL poll, `codex exec resume` inject, recent-session attach in TUI picker |
 | Cursor Agents | P0 | Wired as Sidecar via cursor-connect; live session attach |
 | Hermes Agent | P0 | Wired as Sidecar (session export + logs); live session attach |
 | Temper Native | P0 | Minimal native agent loop for direct provider execution |
 | Generic `exec` | P0 | Allows unsupported agent CLIs to be configured without a Temper release |
-| Goose | P0 | Wired as Sidecar (`goose run --interactive` launch, session export poll, TUI inject, `goose run --resume` fallback); recent-session attach in TUI picker |
+| Goose | P0 | Wired as Sidecar (`goose run --interactive` launch, session export poll, TUI inject / Ctrl-C interrupt, `goose run --resume` fallback); recent-session attach. Live-owner inject conflicts classify as `live_owner`. |
 | Aider | P1 | Community/first-party adapter candidate |
 
 Agent adapters should expose capability metadata where available:

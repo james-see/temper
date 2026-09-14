@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func TestParseMuseJSONL(t *testing.T) {
 		types = append(types, ing.Type)
 	}
 	got := strings.Join(types, ",")
-	want := "user.message,tool.requested,tool.requested,tool.completed,model.thinking,model.completed,user.message"
+	want := "user.message,tool.requested,tool.completed,model.thinking,model.completed,user.message"
 	if got != want {
 		t.Fatalf("got %s want %s", got, want)
 	}
@@ -233,5 +234,100 @@ func TestParseMuseOpenSessionLogs(t *testing.T) {
 	paths := parseMuseOpenSessionLogs(out)
 	if len(paths) != 1 || !strings.HasSuffix(paths[0], "session.jsonl") {
 		t.Fatalf("%v", paths)
+	}
+}
+
+func TestParseMuseRealFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/muse/session.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ings, cur := parseMuseJSONL(string(raw), museCursor{})
+	if cur.seq == 0 {
+		t.Fatal("expected sequences")
+	}
+	var types []string
+	hasTool, hasApproval := false, false
+	for _, ing := range ings {
+		types = append(types, ing.Type)
+		if ing.Type == "tool.requested" {
+			hasTool = true
+		}
+		if ing.Type == "user.message" {
+			if k, _ := ing.Data["kind"].(string); k == "approval" {
+				hasApproval = true
+			}
+		}
+	}
+	if !hasTool {
+		t.Fatalf("expected tool.requested in %v", types)
+	}
+	if !hasApproval {
+		t.Fatalf("expected approval in %v", types)
+	}
+	// side_effect_intent must not double-count with tool_batch.effect.started
+	req := 0
+	for _, tpe := range types {
+		if tpe == "tool.requested" {
+			req++
+		}
+	}
+	if req > 6 {
+		t.Fatalf("too many tool.requested (%d) — possible intent/started double count: %v", req, types)
+	}
+
+	exp, err := os.ReadFile("testdata/muse/export.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eings, _ := parseMuseExport(string(exp), museCursor{})
+	if len(eings) == 0 {
+		t.Fatal("export produced no ingests")
+	}
+}
+
+func TestMuseDiscoverAfterSpawn(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "2026", "09", "10", "old-session")
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "session.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewMuse("muse", true)
+	m.SessionsRoot = root
+	m.LookPath = func(string) (string, error) { return "/bin/muse", nil }
+	m.OpenTerm = func([]string, string) (*term.Handle, error) { return &term.Handle{}, nil }
+	started := time.Now()
+	m.Now = func() time.Time { return started }
+	if _, err := m.Start(context.Background(), TaskRequest{RunID: "r1", Workspace: "/tmp/ws", Prompt: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	newDir := filepath.Join(root, "2026", "09", "11", "new-session")
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newDir, "session.jsonl"), []byte(`{"sequence":1,"payload_type":"user_prompt","payload":{"text":"hi"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := m.Discover(context.Background())
+	if !ok || id != "new-session" {
+		t.Fatalf("got %s %v seen=%v", id, ok, m.seenIDs)
+	}
+}
+
+func TestMuseInjectLiveOwner(t *testing.T) {
+	m := NewMuse("muse", false)
+	m.LookPath = func(string) (string, error) { return "/bin/muse", nil }
+	m.Bind("ses-1")
+	m.Exec = func(context.Context, string, []string) (string, error) {
+		return "", fmt.Errorf("muse: session already in use by interactive session")
+	}
+	err := m.Inject(context.Background(), "replan")
+	if err == nil || !IsLiveOwner(err) {
+		t.Fatalf("%v", err)
 	}
 }

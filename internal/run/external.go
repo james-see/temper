@@ -39,15 +39,17 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		reqWS = opts.CursorWorkspace
 	}
 	if side.SessionID() != "" {
-		if p := strings.TrimSpace(opts.Goal); p != "" {
-			if err := side.Inject(ctx, p); err != nil && !agent.IsInjectUnavailable(err) {
-				return m.fail(ctx, err)
+		if !opts.Continuing {
+			if p := strings.TrimSpace(opts.Goal); p != "" {
+				if err := side.Inject(ctx, p); err != nil && !agent.IsInjectUnavailable(err) {
+					return m.fail(ctx, err)
+				}
 			}
 		}
 	} else if _, err := side.Start(ctx, agent.TaskRequest{
 		RunID: id, Prompt: opts.Goal, Workspace: reqWS, Session: opts.CursorSession,
 	}); err != nil {
-		soft := (side.ID() == "hermes" || side.ID() == "opencode" || side.ID() == "muse" || side.ID() == "goose") && !strings.Contains(err.Error(), "PATH")
+		soft := (side.ID() == "hermes" || side.ID() == "opencode" || side.ID() == "muse" || side.ID() == "goose" || side.ID() == "claude-code" || side.ID() == "codex") && !strings.Contains(err.Error(), "PATH")
 		if soft {
 			m.debug("sidecar.start", "err", err.Error(), "cmd", side.LaunchLine(), "id", side.ID())
 		} else {
@@ -63,6 +65,11 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 	emit(event.AgentStarted, side.ID(), map[string]any{
 		"id": side.ID(), "command": side.LaunchLine(), "spawn": !opts.SkipSpawn, "attach": attach,
 	})
+	if sid := side.SessionID(); sid != "" {
+		emit(event.SidecarBound, side.ID(), map[string]any{
+			"agent": side.ID(), "session": sid, "workspace": reqWS, "attach": attach,
+		})
+	}
 	if opts.SkipSpawn {
 		m.debug("sidecar.plain", "cmd", side.LaunchLine(), "id", side.ID())
 	}
@@ -75,17 +82,23 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		m.Cfg.Reflex.Detectors.Stagnation.Actions,
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
+	ladder := reflex.NewLadder(sidecarRecovery(m.Cfg))
+	for action, n := range opts.LadderAttempts {
+		if n > 0 {
+			ladder.Attempts[action] = n
+		}
+	}
 	m.sess = &session{
 		sidecar: side,
 		ws:      ws,
 		opts:    opts,
 		tried:   tried,
 		eng:     eng,
-		ladder:  reflex.NewLadder(sidecarRecovery(m.Cfg)),
+		ladder:  ladder,
 		approve: make(chan struct{}, 1),
 		mode:    m.Cfg.Reflex.EffectiveMode(),
 	}
-	m.debug("routing", "agent", m.rec.Agent, "sidecar", true, "spawn", !opts.SkipSpawn, "attach", attach)
+	m.debug("routing", "agent", m.rec.Agent, "sidecar", true, "spawn", !opts.SkipSpawn, "attach", attach, "continue", opts.Continuing)
 	return m.driveExternal(ctx)
 }
 
@@ -116,6 +129,10 @@ func (m *Manager) openSidecar(opts Options, dec arbiter.Decision) (agent.Sidecar
 		return agent.NewMuse(agentCommand(m.Cfg, dec.Selected.Agent, "muse"), !opts.SkipSpawn), "session+logs", nil
 	case "goose":
 		return agent.NewGoose(agentCommand(m.Cfg, dec.Selected.Agent, "goose"), !opts.SkipSpawn), "session+logs", nil
+	case "claude-code":
+		return agent.NewClaudeCode(agentCommand(m.Cfg, dec.Selected.Agent, "claude"), !opts.SkipSpawn), "session+logs", nil
+	case "codex":
+		return agent.NewCodex(agentCommand(m.Cfg, dec.Selected.Agent, "codex"), !opts.SkipSpawn), "session+logs", nil
 	case "cursor":
 		return m.openCursor(opts)
 	default:
@@ -210,6 +227,18 @@ func (m *Manager) startAttached(opts Options, t agent.SessionPick) (agent.Sideca
 			return nil, "", err
 		}
 		return g, "session+logs", nil
+	case "claude-code":
+		cc := agent.NewClaudeCode(agentCommand(m.Cfg, t.Agent, "claude"), false)
+		if _, err := cc.Start(context.Background(), req); err != nil {
+			return nil, "", err
+		}
+		return cc, "session+logs", nil
+	case "codex":
+		cx := agent.NewCodex(agentCommand(m.Cfg, t.Agent, "codex"), false)
+		if _, err := cx.Start(context.Background(), req); err != nil {
+			return nil, "", err
+		}
+		return cx, "session+logs", nil
 	default:
 		return nil, "", agent.UnimplementedError(t.Agent)
 	}
@@ -246,7 +275,7 @@ func resolveAttachTargets(opts Options, selectedAgent string) ([]agent.SessionPi
 			return nil, nil
 		}
 		typ := agent.TypeOf(selectedAgent)
-		if typ == "hermes" || typ == "opencode" || typ == "muse" || typ == "goose" {
+		if typ == "hermes" || typ == "opencode" || typ == "muse" || typ == "goose" || typ == "claude-code" || typ == "codex" {
 			return []agent.SessionPick{{
 				Agent: typ, SessionID: sess, Workspace: opts.CursorWorkspace,
 			}}, nil
@@ -275,7 +304,7 @@ func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
 	}
 	if sess != "" {
 		typ := agent.TypeOf(opts.Agent)
-		if typ == "hermes" || typ == "opencode" || typ == "muse" || typ == "goose" {
+		if typ == "hermes" || typ == "opencode" || typ == "muse" || typ == "goose" || typ == "claude-code" || typ == "codex" {
 			return nil, nil
 		}
 		if opts.CursorWorkspace != "" {
@@ -328,9 +357,11 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		}
 		userOnly := sidecarUserOnly(ings)
 		goalShift := false
+		approvalPending := false
 		for i, ing := range ings {
 			if ing.Type == event.UserMessage {
 				text := strings.TrimSpace(fmt.Sprint(ing.Data["text"]))
+				origKind, _ := ing.Data["kind"].(string)
 				if systemNoise(text) {
 					ing.Data["kind"] = "ack"
 					ing.Data["same_goal"] = true
@@ -338,10 +369,18 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 					emit(ing.Type, h.ID(), ing.Data)
 					continue
 				}
-				kind := classifyTurn(s.opts.Goal, text)
 				if ing.Data == nil {
 					ing.Data = map[string]any{}
 				}
+				if origKind == "approval" {
+					ing.Data["kind"] = "approval"
+					ing.Data["same_goal"] = true
+					approvalPending = true
+					ings[i] = ing
+					emit(ing.Type, h.ID(), ing.Data)
+					continue
+				}
+				kind := classifyTurn(s.opts.Goal, text)
 				ing.Data["kind"] = kind
 				ing.Data["same_goal"] = kind != turnNew
 				ings[i] = ing
@@ -359,6 +398,24 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			}
 			emit(ing.Type, h.ID(), ing.Data)
 		}
+		if approvalPending {
+			m.Hub.set(func(snap *Snapshot) {
+				snap.PendingRecovery = "approval"
+				snap.PendingReasons = []string{"approval"}
+			})
+			_ = m.transition(ctx, StateWaitingHuman)
+			select {
+			case <-ctx.Done():
+				_ = h.Interrupt(ctx, h.SessionID())
+				return m.cancel(ctx)
+			case <-s.approve:
+				if err := m.applyPending(ctx, emit); err != nil {
+					return m.rec, err
+				}
+			case <-tick.C:
+			}
+			continue
+		}
 		if goalShift {
 			lastState = ""
 			lastReasons = ""
@@ -371,8 +428,13 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			if !bound {
 				bound = true
 				emit(event.AgentStarted, h.ID(), map[string]any{"id": h.ID(), "session": id})
+				emit(event.SidecarBound, h.ID(), map[string]any{
+					"agent": h.ID(), "session": id, "workspace": m.rec.Workspace, "attach": attachMode(h.ID()),
+				})
 			}
 		}
+
+		m.drainPromptQueue(ctx, emit, ings)
 
 		// Wait for Hermes to come up — do not assess or spam starting events.
 		if !bound && len(ings) == 0 {
@@ -392,6 +454,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		// Empty 1s polls are not a turn. Thinking growth still arrives as ingest
 		// when Hermes flushes or updates the last assistant row.
 		if len(ings) == 0 {
+			m.drainPromptQueue(ctx, emit, ings)
 			if m.shouldApplyPending() {
 				if err := m.applyPending(ctx, emit); err != nil {
 					return m.rec, err
@@ -733,11 +796,24 @@ func (m *Manager) applyPending(ctx context.Context, emit func(string, string, an
 	case "switch_model":
 		prompt += " Switch to a different model and retry."
 	case "switch_agent":
-		emit(event.AgentSwitched, "reflex", map[string]any{"from": m.rec.Agent, "to": ""})
-		emit(event.StrategyChanged, "reflex", map[string]any{"action": p.Action})
-		emit(event.RecoveryCompleted, "reflex", map[string]any{"action": p.Action})
+		to, ok := pickHandoffAgent(m.Cfg, m.rec.Agent)
+		if !ok {
+			emit(event.RecoveryFailed, "reflex", map[string]any{"action": p.Action, "error": "no handoff target"})
+			p.Held = true
+			_ = m.transition(ctx, StateWaitingHuman)
+			return nil
+		}
+		if err := m.switchSidecar(ctx, to, emit); err != nil {
+			emit(event.RecoveryFailed, "reflex", map[string]any{"action": p.Action, "error": err.Error(), "to": to})
+			p.Held = true
+			p.LastErr = err.Error()
+			_ = m.transition(ctx, StateWaitingHuman)
+			return nil
+		}
+		emit(event.StrategyChanged, "reflex", map[string]any{"action": p.Action, "to": to})
+		emit(event.RecoveryCompleted, "reflex", map[string]any{"action": p.Action, "to": to})
 		m.clearPending()
-		return nil
+		return m.transition(ctx, StateExecuting)
 	case "human":
 		emit(event.StrategyChanged, "reflex", map[string]any{"action": p.Action})
 		emit(event.RecoveryCompleted, "reflex", map[string]any{"action": p.Action})

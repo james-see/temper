@@ -156,31 +156,45 @@ func museSeq(v any) int64 {
 func ingestMuseEnvelope(env museEnv) []Ingest {
 	kind := strings.ToLower(env.eventKind)
 	pt := strings.ToLower(env.payloadType)
-	key := kind
-	if key == "" {
-		key = pt
-	}
+	// Real Muse logs put the specific name in payload_type (e.g. tool_batch.effect.started)
+	// while payload.kind is a coarse class (tool_batch_effect). Match against both.
+	key := strings.TrimSpace(pt + " " + kind)
 	switch {
 	case museIsUserPrompt(key, env.payload):
 		if text := museUserText(env.payload); text != "" {
 			return []Ingest{{Type: "user.message", Data: map[string]any{"text": text}}}
 		}
-	case strings.Contains(key, "approval.review") || strings.HasPrefix(key, "approval_wait"):
+	case strings.Contains(key, "approval.review") || strings.Contains(key, "approval_wait") ||
+		strings.HasPrefix(kind, "approval"):
 		msg := "approval pending"
 		if text := museToolArgs(env.payload); text != "" {
 			msg = "approval pending: " + clip(text, 200)
 		}
+		if name := museRecordToolName(env.payload); name != "" {
+			msg = "approval pending: " + name
+		}
 		return []Ingest{{Type: "user.message", Data: map[string]any{"text": msg, "kind": "approval"}}}
-	case strings.Contains(key, "side_effect_intent") || strings.HasSuffix(key, "tool_batch.effect.started") ||
-		strings.Contains(key, "tool_batch.effect.started"):
+	// side_effect_intent precedes tool_batch.effect.started for the same call;
+	// only emit on the started event to avoid double tool.requested.
+	case strings.Contains(key, "side_effect_intent"):
+		return nil
+	case strings.Contains(key, "tool_batch.effect.started") ||
+		(strings.Contains(key, "tool_batch_effect") && strings.Contains(pt, "started")):
 		name, args := museToolCall(env.payload)
+		if name == "" {
+			name = museRecordToolName(env.payload)
+		}
 		if name == "" {
 			name = "muse"
 		}
 		return []Ingest{{Type: "tool.requested", Data: map[string]any{"tool": name, "args": args}}}
 	case strings.Contains(key, "tool_batch.effect.terminal") || strings.Contains(key, "tool.effect.terminal") ||
-		strings.Contains(key, "edit") && strings.Contains(key, "terminal"):
+		(strings.Contains(key, "tool_batch_effect") && strings.Contains(pt, "terminal")) ||
+		(strings.Contains(key, "edit") && strings.Contains(key, "terminal")):
 		name, out := museToolResult(env.payload)
+		if name == "" {
+			name = museRecordToolName(env.payload)
+		}
 		if name == "" {
 			name = "muse"
 		}
@@ -189,7 +203,9 @@ func ingestMuseEnvelope(env museEnv) []Ingest {
 			data["error"] = err
 		}
 		return []Ingest{{Type: "tool.completed", Data: data}}
-	case strings.Contains(key, "model") || strings.Contains(key, "llm") || strings.Contains(key, "assistant"):
+	case strings.Contains(key, "model_completed") || strings.Contains(key, "model.completed") ||
+		strings.Contains(key, "assistant") && strings.Contains(key, "message") ||
+		strings.Contains(key, "llm"):
 		var out []Ingest
 		if reason := museReasoning(env.payload); reason != "" {
 			out = append(out, thinkingIngest(len(reason), len(reason), nil, false, reason))
@@ -198,7 +214,11 @@ func ingestMuseEnvelope(env museEnv) []Ingest {
 			out = append(out, Ingest{Type: "model.completed", Data: map[string]any{"content": text}})
 		}
 		return out
-	case strings.Contains(key, "message") || strings.Contains(key, "turn.completed"):
+	case strings.Contains(key, "reasoning_committed") || strings.Contains(key, "reasoning"):
+		if reason := museReasoning(env.payload); reason != "" {
+			return []Ingest{thinkingIngest(len(reason), len(reason), nil, false, reason)}
+		}
+	case strings.Contains(key, "message") || strings.Contains(key, "turn.completed") || strings.Contains(key, "output"):
 		if text := museAssistantText(env.payload); text != "" {
 			return []Ingest{{Type: "model.completed", Data: map[string]any{"content": text}}}
 		}
@@ -277,14 +297,30 @@ func museToolCall(payload map[string]any) (name, args string) {
 		name = strings.TrimPrefix(op, "tool:")
 	}
 	if ev, ok := payload["event"].(map[string]any); ok {
-		if n := firstString(ev, "tool", "tool_name", "name"); n != "" {
+		if n := firstString(ev, "tool", "tool_name", "name", "operation"); n != "" {
 			name = n
+			if strings.HasPrefix(name, "tool:") {
+				name = strings.TrimPrefix(name, "tool:")
+			}
 		}
 		if a := firstString(ev, "args", "arguments", "input", "command"); a != "" {
 			args = a
 		}
 	}
+	if name == "" {
+		name = museRecordToolName(payload)
+	}
 	return name, args
+}
+
+func museRecordToolName(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if rec, ok := payload["record"].(map[string]any); ok {
+		return firstString(rec, "tool_name", "name", "tool")
+	}
+	return ""
 }
 
 func museToolArgs(payload map[string]any) string {
@@ -329,6 +365,25 @@ func pickMuseUnseen(ids []string, seen map[string]bool) (string, bool) {
 	for _, id := range ids {
 		if !seen[id] {
 			return id, true
+		}
+	}
+	return "", false
+}
+
+// pickMuseDiscover prefers unseen sessions modified at/after started (post-spawn),
+// then any unseen. Newest-first row order from scanMuseSessions.
+func pickMuseDiscover(rows []museSessionRow, seen map[string]bool, started time.Time) (string, bool) {
+	for _, r := range rows {
+		if seen[r.ID] {
+			continue
+		}
+		if started.IsZero() || !r.ModTime.Before(started) {
+			return r.ID, true
+		}
+	}
+	for _, r := range rows {
+		if !seen[r.ID] {
+			return r.ID, true
 		}
 	}
 	return "", false

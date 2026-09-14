@@ -50,8 +50,10 @@ First-class external agent adapters:
 - Codex
 - Cursor Agents
 - Hermes Agent
-- generic `exec` adapter
-- Goose / Aider adapters as capacity allows
+- Muse Code
+- Goose
+- generic `exec` adapter (as capacity allows)
+- Aider adapters as capacity allows
 
 Agent runtime capabilities:
 
@@ -61,14 +63,13 @@ Agent runtime capabilities:
 - resumable sessions
 - persistent conversation/session IDs
 - agent status and lifecycle events
-- agent hooks and notifications
-- session recovery after Temper restart
-- prompt queuing while an agent is active
-- durable prompt drafts / pending input
+- ~~session recovery after Temper restart~~ (`temper continue <run-id>`)
+- ~~prompt queuing while an agent is active~~ (`EnqueuePrompt` / TUI follow-up)
+- durable prompt drafts / pending input (partial: queue events; drafts UI later)
 - attachments and file references
 - plan / build / debug / custom execution modes where adapters expose them
 - subagent event capture
-- clean handoff from one agent to another
+- ~~clean handoff from one agent to another~~ (`switch_agent` recovery rung)
 
 **Exit criterion:** one task can start in one agent, survive a restart, and be recovered or continued by another agent without losing workspace or execution history.
 

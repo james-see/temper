@@ -233,7 +233,17 @@ func (h *Hermes) Inject(ctx context.Context, prompt string) error {
 }
 
 func IsLiveOwner(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "already has a live owner")
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "already has a live owner") ||
+		strings.Contains(s, "live owner") ||
+		strings.Contains(s, "session is locked") ||
+		strings.Contains(s, "already in use") ||
+		strings.Contains(s, "another process") ||
+		strings.Contains(s, "owned by another") ||
+		strings.Contains(s, "interactive session")
 }
 
 func (h *Hermes) Queue(ings ...Ingest) {

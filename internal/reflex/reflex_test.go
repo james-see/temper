@@ -158,7 +158,7 @@ func TestLadderBackoff(t *testing.T) {
 		}
 		got = append(got, step)
 	}
-	if len(got) != 4 || got[3] != "human" {
+	if len(got) != 5 || got[3] != "switch_agent" || got[4] != "human" {
 		t.Fatalf("%v", got)
 	}
 	if _, ok := l.Next(); ok {
