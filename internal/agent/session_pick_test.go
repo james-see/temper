@@ -93,8 +93,10 @@ func TestParseOpenCodeSessionPicks(t *testing.T) {
 }
 
 func TestLiveSessionPicksFilterAndEmpty(t *testing.T) {
-	oldC, oldH, oldO := probeCursor, probeHermes, probeOpenCode
-	defer func() { probeCursor, probeHermes, probeOpenCode = oldC, oldH, oldO }()
+	oldC, oldH, oldO, oldM := probeCursor, probeHermes, probeOpenCode, probeMuse
+	defer func() {
+		probeCursor, probeHermes, probeOpenCode, probeMuse = oldC, oldH, oldO, oldM
+	}()
 
 	probeCursor = func() ([]SessionPick, error) {
 		return []SessionPick{{Agent: "cursor", SessionID: "c1", Label: "temper"}}, nil
@@ -104,6 +106,9 @@ func TestLiveSessionPicksFilterAndEmpty(t *testing.T) {
 	}
 	probeOpenCode = func(context.Context) ([]SessionPick, error) {
 		return nil, context.DeadlineExceeded
+	}
+	probeMuse = func(context.Context) ([]SessionPick, error) {
+		return nil, nil
 	}
 
 	all, err := LiveSessionPicks(context.Background(), "")
@@ -120,11 +125,14 @@ func TestLiveSessionPicksFilterAndEmpty(t *testing.T) {
 }
 
 func TestLiveSessionPicksCursorErrorWhenFiltered(t *testing.T) {
-	oldC, oldH, oldO := probeCursor, probeHermes, probeOpenCode
-	defer func() { probeCursor, probeHermes, probeOpenCode = oldC, oldH, oldO }()
+	oldC, oldH, oldO, oldM := probeCursor, probeHermes, probeOpenCode, probeMuse
+	defer func() {
+		probeCursor, probeHermes, probeOpenCode, probeMuse = oldC, oldH, oldO, oldM
+	}()
 	probeCursor = func() ([]SessionPick, error) { return nil, errNotRunning("cursor closed") }
 	probeHermes = func(context.Context) ([]SessionPick, error) { return nil, nil }
 	probeOpenCode = func(context.Context) ([]SessionPick, error) { return nil, nil }
+	probeMuse = func(context.Context) ([]SessionPick, error) { return nil, nil }
 
 	_, err := LiveSessionPicks(context.Background(), "cursor")
 	if err == nil || !strings.Contains(err.Error(), "cursor") {
@@ -132,6 +140,31 @@ func TestLiveSessionPicksCursorErrorWhenFiltered(t *testing.T) {
 	}
 	picks, err := LiveSessionPicks(context.Background(), "")
 	if err != nil || len(picks) != 0 {
+		t.Fatalf("%+v %v", picks, err)
+	}
+}
+
+func TestLiveMusePicksRequiresOpenLog(t *testing.T) {
+	old := findMuseOpenSessionLogsFn
+	defer func() { findMuseOpenSessionLogsFn = old }()
+	findMuseOpenSessionLogsFn = func(context.Context) ([]string, error) { return nil, nil }
+	picks, err := liveMusePicks(context.Background())
+	if err != nil || len(picks) != 0 {
+		t.Fatalf("no open log => empty %+v %v", picks, err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "2026", "09", "11", "live-uuid", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findMuseOpenSessionLogsFn = func(context.Context) ([]string, error) {
+		return []string{path}, nil
+	}
+	picks, err = liveMusePicks(context.Background())
+	if err != nil || len(picks) != 1 || picks[0].SessionID != "live-uuid" {
 		t.Fatalf("%+v %v", picks, err)
 	}
 }

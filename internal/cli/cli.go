@@ -246,6 +246,18 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 					fmt.Fprintf(os.Stdout, " --prompt %q", goal)
 				}
 				fmt.Fprintln(os.Stdout)
+			case "muse":
+				fmt.Fprintf(os.Stdout, "open a terminal in %s and run:\n  muse", root)
+				if strings.TrimSpace(goal) != "" {
+					fmt.Fprintf(os.Stdout, " %q", goal)
+				}
+				fmt.Fprintln(os.Stdout)
+			case "goose":
+				fmt.Fprintf(os.Stdout, "open a terminal in %s and run:\n  goose session", root)
+				if strings.TrimSpace(goal) != "" {
+					fmt.Fprintf(os.Stdout, "  # or: goose run --interactive --text %q", goal)
+				}
+				fmt.Fprintln(os.Stdout)
 			default:
 				fmt.Fprintf(os.Stdout, "open a terminal and run:\n  hermes --tui --in %s --source temper\n", root)
 				if strings.TrimSpace(goal) != "" {
@@ -263,7 +275,7 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 				opts.AttachTargets = picks
 				opts.CursorAttachAll = false
 				opts.CursorSession = ""
-			} else if sess != "" && !all && (agent.TypeOf(flags.Agent) == "hermes" || agent.TypeOf(flags.Agent) == "opencode") {
+			} else if sess != "" && !all && (agent.TypeOf(flags.Agent) == "hermes" || agent.TypeOf(flags.Agent) == "opencode" || agent.TypeOf(flags.Agent) == "muse" || agent.TypeOf(flags.Agent) == "goose") {
 				opts.AttachTargets = []agent.SessionPick{{
 					Agent: agent.TypeOf(flags.Agent), SessionID: sess,
 				}}
@@ -342,17 +354,17 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		cursorSess = "*"
 	}
 	return tui.Run(tui.Options{
-		Goal:     goal,
-		Agent:    flags.Agent,
-		Provider: flags.Provider,
-		Model:    flags.Model,
-		Hub:      mgr.Hub,
-		Cancel:   cancel,
-		OnStart:  start,
-		OnFollow: follow,
-		OnMode:   mgr.ToggleReflexMode,
-		OnApprove: mgr.ApproveRecovery,
-		Catalog:  catalog,
+		Goal:       goal,
+		Agent:      flags.Agent,
+		Provider:   flags.Provider,
+		Model:      flags.Model,
+		Hub:        mgr.Hub,
+		Cancel:     cancel,
+		OnStart:    start,
+		OnFollow:   follow,
+		OnMode:     mgr.ToggleReflexMode,
+		OnApprove:  mgr.ApproveRecovery,
+		Catalog:    catalog,
 		ListModels: listModels,
 		ListSessions: func(filter string) ([]agent.SessionPick, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)

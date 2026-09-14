@@ -90,7 +90,7 @@ func TestUnifiedPickerNativeEscape(t *testing.T) {
 func TestMultiSelectSpaceAndEnter(t *testing.T) {
 	var got AttachSpec
 	m := New(Options{
-		Agent: "opencode",
+		Agent:   "opencode",
 		OnStart: func(_, _, _ string, attach AttachSpec) { got = attach },
 	})
 	next, _ := m.Update(sessionPicksMsg{Picks: []agent.SessionPick{

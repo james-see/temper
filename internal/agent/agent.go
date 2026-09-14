@@ -41,7 +41,7 @@ type Agent interface {
 }
 
 // Sidecar is an external harness Temper polls and steers.
-// Hermes, Cursor, and OpenCode implement this.
+// Hermes, Cursor, OpenCode, and Muse implement this.
 type Sidecar interface {
 	Agent
 	Poll(ctx context.Context) ([]Ingest, error)

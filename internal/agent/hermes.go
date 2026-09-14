@@ -37,18 +37,18 @@ type Hermes struct {
 
 	term *term.Handle
 
-	mu         sync.Mutex
-	bin        string
-	workspace  string
-	sessionID  string
-	seenIDs    map[string]bool
-	exportCur  exportCursor
-	logSeen    map[string]bool
-	argv       []string
-	started    time.Time
-	queue      []Ingest
-	snapOnce   sync.Once
-	snapDone   chan struct{}
+	mu        sync.Mutex
+	bin       string
+	workspace string
+	sessionID string
+	seenIDs   map[string]bool
+	exportCur exportCursor
+	logSeen   map[string]bool
+	argv      []string
+	started   time.Time
+	queue     []Ingest
+	snapOnce  sync.Once
+	snapDone  chan struct{}
 }
 
 func NewHermes(command string, spawn bool) *Hermes {

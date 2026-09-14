@@ -38,14 +38,15 @@ Capabilities may include:
 P0/P1 targets:
 - `native`
 - `opencode`
+- `muse`
 - `claude-code`
 - `codex`
+- `goose`
 - `cursor`
 - `hermes`
 - generic `exec`
 
 Later:
-- Goose
 - Aider
 - community adapters
 

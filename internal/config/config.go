@@ -190,6 +190,8 @@ func Defaults() Config {
 			"native":   {Type: "temper"},
 			"hermes":   {Type: "hermes"},
 			"opencode": {Type: "opencode"},
+			"muse":     {Type: "muse"},
+			"goose":    {Type: "goose"},
 			"cursor":   {Type: "cursor"},
 		},
 		Reflex: Reflex{
