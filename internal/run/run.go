@@ -381,7 +381,11 @@ func (m *Manager) adoptUserGoal(ctx context.Context, text, kind string) bool {
 	m.sess.prevPass = nil
 	m.sess.pending = nil
 	if m.sess.sidecar != nil {
-		m.sess.ladder = reflex.NewLadder(sidecarRecovery(m.Cfg))
+		modelOverride := false
+		if caps, err := m.sess.sidecar.Capabilities(ctx); err == nil {
+			modelOverride = caps.ModelOverride
+		}
+		m.sess.ladder = reflex.NewLadder(sidecarRecoveryCaps(m.Cfg, modelOverride))
 	} else {
 		m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))
 	}
@@ -591,7 +595,7 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 			if assess.State == reflex.Regressing {
 				emit(event.RegressionDetected, "reflex", assess)
 			}
-			action, ok := ladder.Next()
+			action, ok := ladder.NextFor(assess)
 			if !ok {
 				return m.fail(ctx, fmt.Errorf("recovery exhausted"))
 			}
@@ -830,17 +834,22 @@ func (m *Manager) eventDigest() string {
 }
 
 func recoveryActions(cfg config.Config) []string {
-	return filterRecovery(cfg, false)
+	return filterRecovery(cfg, false, true)
 }
 
 func sidecarRecovery(cfg config.Config) []string {
-	return filterRecovery(cfg, true)
+	return filterRecovery(cfg, true, false)
 }
 
-func filterRecovery(cfg config.Config, sidecar bool) []string {
+// sidecarRecoveryCaps keeps switch_model when the sidecar can honor ModelOverride.
+func sidecarRecoveryCaps(cfg config.Config, modelOverride bool) []string {
+	return filterRecovery(cfg, true, modelOverride)
+}
+
+func filterRecovery(cfg config.Config, sidecar bool, modelOverride bool) []string {
 	var out []string
 	for _, s := range cfg.Reflex.Recovery {
-		if sidecar && s.Action == "switch_model" {
+		if sidecar && s.Action == "switch_model" && !modelOverride {
 			continue
 		}
 		out = append(out, s.Action)
@@ -851,10 +860,8 @@ func filterRecovery(cfg config.Config, sidecar bool) []string {
 func recoveryPrompt(action, goal string, a reflex.Assessment) string {
 	prompt := fmt.Sprintf("Reflex %s (%s). Reasons: %s. Action: %s. Re-anchor on goal: %s",
 		a.State, strings.Join(a.Reasons, ", "), strings.Join(a.Reasons, ", "), action, goal)
-	// MCP tool-discovery loops (tool_search/tool_call cycling on an
-	// unconnected server) need auth guidance, not a generic replan nudge —
-	// retrying discovery cannot fix a missing OAuth token or stale session.
-	if strings.HasPrefix(a.Family, "discover:") {
+	switch {
+	case strings.HasPrefix(a.Family, "discover:"):
 		topic := strings.TrimPrefix(a.Family, "discover:")
 		prompt += fmt.Sprintf(
 			" The %s MCP server is not reachable in this session — stop retrying "+
@@ -862,6 +869,10 @@ func recoveryPrompt(action, goal string, a reflex.Assessment) string {
 				"`hermes mcp login %s` (to authenticate) and restart the session "+
 				"(or run /reload-mcp) so the %s tools load, then continue.",
 			topic, topic, topic)
+	case action == "critic":
+		prompt += " Critic mode: diagnose the last failed approach, name what not to repeat, then take one concrete different action."
+	case action == "replan":
+		prompt += " Compact failed attempts into a short plan, then execute the next smallest verifiable step."
 	}
 	return prompt
 }

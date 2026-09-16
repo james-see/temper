@@ -157,3 +157,23 @@ func (n *Native) Step(ctx context.Context) StepResult {
 func (n *Native) Inject(role, content string) {
 	n.messages = append(n.messages, provider.Message{Role: role, Content: content})
 }
+
+// SetModel updates the model used for subsequent Step calls.
+func (n *Native) SetModel(model string) {
+	if model != "" {
+		n.model = model
+	}
+}
+
+// SetProvider replaces the underlying provider and model for subsequent steps.
+func (n *Native) SetProvider(p provider.Provider, model string) {
+	if p != nil {
+		n.prov = p
+	}
+	if model != "" {
+		n.model = model
+	}
+}
+
+// Model returns the current model id.
+func (n *Native) Model() string { return n.model }

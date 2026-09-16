@@ -135,18 +135,18 @@ Advanced observable-progress detection:
 Recovery actions:
 
 - goal re-anchoring
-- replan
-- context compaction / failed-attempt summary
-- critic/debugger invocation
-- model switch
-- provider switch
-- agent switch
+- ~~replan~~ (family-conditioned via `PreferRecovery`)
+- context compaction / failed-attempt summary (partial: replan prompt)
+- ~~critic/debugger invocation~~ (preferred for repeated-error / regression)
+- ~~model switch~~ (native real escalate; sidecar ModelOverride inject)
+- provider switch (via model escalate fallback)
+- ~~agent switch~~ (v0.2 handoff)
 - checkpoint rollback
 - alternate-approach fork
-- human escalation
+- ~~human escalation~~ (preferred for `discover:*`)
 - intervention attempt limits / backoff
 
-**Exit criterion:** benchmark suite demonstrates a measurable completion-rate improvement with Reflex enabled versus disabled.
+**Partial (VAL-2672):** family-conditioned ladder selection + real `switch_model` escalate. Remaining: compact summaries, rollback/fork, Reflex benchmark suite.
 
 ---
 

@@ -10,6 +10,7 @@ import (
 	"github.com/james-see/temper/internal/arbiter"
 	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/event"
+	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/reflex"
 	"github.com/james-see/temper/internal/store"
 	"github.com/james-see/temper/internal/workspace"
@@ -83,6 +84,9 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
 	ladder := reflex.NewLadder(sidecarRecovery(m.Cfg))
+	if caps, err := side.Capabilities(ctx); err == nil && caps.ModelOverride {
+		ladder = reflex.NewLadder(sidecarRecoveryCaps(m.Cfg, true))
+	}
 	for action, n := range opts.LadderAttempts {
 		if n > 0 {
 			ladder.Attempts[action] = n
@@ -550,7 +554,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 				emit(event.RegressionDetected, "reflex", assess)
 			}
 			if s.pending == nil {
-				action, ok := s.ladder.Next()
+				action, ok := s.ladder.NextFor(assess)
 				if !ok {
 					return m.fail(ctx, fmt.Errorf("recovery exhausted"))
 				}
@@ -794,7 +798,21 @@ func (m *Manager) applyPending(ctx context.Context, emit func(string, string, an
 	prompt := recoveryPrompt(p.Action, m.sess.opts.Goal, p.Assess)
 	switch p.Action {
 	case "switch_model":
-		prompt += " Switch to a different model and retry."
+		fromProv, fromModel := m.rec.Provider, m.rec.Model
+		switched, toProv, toModel := m.escalateModel(ctx, emit)
+		if switched {
+			prompt += fmt.Sprintf(" Temper switched from %s/%s to %s/%s. Continue with the new model.",
+				fromProv, fromModel, toProv, toModel)
+			emit(event.StrategyChanged, "reflex", map[string]any{
+				"action": p.Action, "from": fromProv + "/" + fromModel, "to": toProv + "/" + toModel,
+				"provider": toProv, "model": toModel,
+			})
+		} else {
+			prompt += " Switch to a different model and retry."
+			emit(event.StrategyChanged, "reflex", map[string]any{
+				"action": p.Action, "from": fromProv + "/" + fromModel, "escalated": false,
+			})
+		}
 	case "switch_agent":
 		to, ok := pickHandoffAgent(m.Cfg, m.rec.Agent)
 		if !ok {
@@ -845,10 +863,95 @@ func (m *Manager) applyPending(ctx context.Context, emit func(string, string, an
 	} else if m.sess.native != nil {
 		m.sess.native.Inject("user", prompt)
 	}
-	emit(event.StrategyChanged, "reflex", map[string]any{"action": p.Action})
+	if p.Action != "switch_model" {
+		emit(event.StrategyChanged, "reflex", map[string]any{"action": p.Action})
+	}
 	emit(event.RecoveryCompleted, "reflex", map[string]any{"action": p.Action})
 	m.clearPending()
 	return m.transition(ctx, StateExecuting)
+}
+
+// escalateModel changes the active native provider/model, or records a model
+// override for sidecars that advertise ModelOverride. Returns whether a real
+// change was applied and the new provider/model ids.
+func (m *Manager) escalateModel(ctx context.Context, emit func(string, string, any)) (bool, string, string) {
+	if m.sess == nil {
+		return false, m.rec.Provider, m.rec.Model
+	}
+	curProv, curModel := m.rec.Provider, m.rec.Model
+	if m.sess.tried == nil {
+		m.sess.tried = map[string]bool{}
+	}
+	if curProv != "" {
+		m.sess.tried[curProv] = true
+	}
+
+	// Prefer another model on the same provider when native.
+	if m.sess.native != nil && curProv != "" {
+		if names, err := provider.ModelNames(ctx, m.Cfg, curProv); err == nil {
+			for _, name := range names {
+				if name != "" && name != curModel {
+					m.sess.native.SetModel(name)
+					m.rec.Model = name
+					m.sess.opts.Model = name
+					m.Hub.set(func(s *Snapshot) { s.Model = name })
+					_ = m.Store.UpdateRun(ctx, m.rec)
+					emit(event.RoutingDecided, "arbiter", map[string]any{
+						"selected": map[string]string{"provider": curProv, "model": name},
+						"reasons":  []string{"switch_model same-provider alternate"},
+					})
+					m.debug("switch_model", "provider", curProv, "from", curModel, "to", name)
+					return true, curProv, name
+				}
+			}
+		}
+	}
+
+	// Next usable provider (native).
+	if m.sess.native != nil {
+		if p, ok := m.fallbackProvider(ctx, m.sess.tried, emit); ok {
+			m.sess.native.SetProvider(p, m.rec.Model)
+			m.sess.opts.Model = m.rec.Model
+			m.debug("switch_model", "provider", m.rec.Provider, "model", m.rec.Model, "via", "fallbackProvider")
+			return true, m.rec.Provider, m.rec.Model
+		}
+	}
+
+	// Sidecar with ModelOverride: pick a configured alternate and inject guidance.
+	if m.sess.sidecar != nil {
+		caps, _ := m.sess.sidecar.Capabilities(ctx)
+		if caps.ModelOverride {
+			alt := alternateSidecarModel(m.Cfg, m.sess.sidecar.ID(), curModel)
+			if alt != "" && alt != curModel {
+				m.rec.Model = alt
+				m.sess.opts.Model = alt
+				m.Hub.set(func(s *Snapshot) { s.Model = alt })
+				_ = m.Store.UpdateRun(ctx, m.rec)
+				emit(event.RoutingDecided, "arbiter", map[string]any{
+					"selected": map[string]string{"agent": m.sess.sidecar.ID(), "model": alt},
+					"reasons":  []string{"switch_model sidecar ModelOverride"},
+				})
+				m.debug("switch_model", "sidecar", m.sess.sidecar.ID(), "from", curModel, "to", alt)
+				return true, m.rec.Provider, alt
+			}
+		}
+	}
+	return false, curProv, curModel
+}
+
+func alternateSidecarModel(cfg config.Config, agentID, current string) string {
+	_ = agentID
+	for _, cand := range []string{
+		provider.DefaultModel(cfg, "anthropic"),
+		provider.DefaultModel(cfg, "openai"),
+		provider.DefaultModel(cfg, "ollama"),
+		"gpt-4.1-mini", "claude-sonnet-4-5", "llama3.2",
+	} {
+		if cand != "" && cand != current {
+			return cand
+		}
+	}
+	return ""
 }
 
 func (m *Manager) clearPending() {

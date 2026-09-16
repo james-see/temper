@@ -23,11 +23,16 @@ type fakeSide struct {
 	pollN     int
 	injected  []string
 	injectErr error
+	caps      agent.Capabilities
 }
 
 func (f *fakeSide) ID() string { return f.id }
 func (f *fakeSide) Capabilities(context.Context) (agent.Capabilities, error) {
-	return agent.Capabilities{ToolCalls: true, Resume: true}, nil
+	c := f.caps
+	if !c.ToolCalls && !c.Resume && !c.ModelOverride {
+		return agent.Capabilities{ToolCalls: true, Resume: true}, nil
+	}
+	return c, nil
 }
 func (f *fakeSide) Start(_ context.Context, req agent.TaskRequest) (agent.Session, error) {
 	if req.Session != "" {

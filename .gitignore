@@ -6,5 +6,6 @@ temper.db
 tmp/
 dist/
 coverage.out
+/temper
 node_modules/
 .temper/

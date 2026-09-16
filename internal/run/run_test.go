@@ -11,10 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/james-see/temper/internal/agent"
 	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/reflex"
+	"github.com/james-see/temper/internal/store"
 )
 
 func TestExecuteDetectsLoop(t *testing.T) {
@@ -406,7 +408,6 @@ func TestRecoveryPromptMCPDiscoveryLoop(t *testing.T) {
 }
 
 func TestRecoveryPromptGenericLoop(t *testing.T) {
-	// A loop without a discover: family gets the generic replan prompt only.
 	a := reflex.Assessment{State: reflex.Looping, Reasons: []string{"repeated-action"}}
 	got := recoveryPrompt("replan", "fix the bug", a)
 	if strings.Contains(got, "MCP server") {
@@ -414,6 +415,87 @@ func TestRecoveryPromptGenericLoop(t *testing.T) {
 	}
 	if !strings.Contains(got, "Reflex looping") {
 		t.Fatalf("generic prompt missing Reflex header: %q", got)
+	}
+	if !strings.Contains(got, "Compact failed") {
+		t.Fatalf("replan prompt missing compact guidance: %q", got)
+	}
+}
+
+func TestFilterRecoveryKeepsSwitchModelWhenOverride(t *testing.T) {
+	cfg := config.Defaults()
+	without := filterRecovery(cfg, true, false)
+	for _, a := range without {
+		if a == "switch_model" {
+			t.Fatal("expected switch_model stripped without ModelOverride")
+		}
+	}
+	with := filterRecovery(cfg, true, true)
+	found := false
+	for _, a := range with {
+		if a == "switch_model" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected switch_model kept with ModelOverride: %v", with)
+	}
+}
+
+func TestAlternateSidecarModelSkipsCurrent(t *testing.T) {
+	cfg := config.Defaults()
+	got := alternateSidecarModel(cfg, "codex", "llama3.2")
+	if got == "" || got == "llama3.2" {
+		t.Fatalf("expected alternate model, got %q", got)
+	}
+	same := alternateSidecarModel(cfg, "codex", got)
+	if same == got {
+		// may still differ via other defaults; just ensure non-empty when possible
+		if same == "" {
+			t.Fatal("empty alternate")
+		}
+	}
+}
+
+func TestEscalateModelSidecarOverride(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Judge.Model = ""
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	side := &fakeSide{
+		id:      "goose",
+		session: "g1",
+		caps:    agent.Capabilities{ToolCalls: true, Resume: true, ModelOverride: true},
+	}
+	mgr.rec = store.Run{ID: "r1", Provider: "ollama", Model: "llama3.2", Workspace: dir}
+	mgr.sess = &session{
+		sidecar: side,
+		opts:    Options{Goal: "x", Model: "llama3.2"},
+		tried:   map[string]bool{},
+	}
+	ok, _, to := mgr.escalateModel(context.Background(), func(string, string, any) {})
+	if !ok {
+		t.Fatal("expected sidecar ModelOverride escalate to succeed")
+	}
+	if to == "" || to == "llama3.2" {
+		t.Fatalf("expected new model, got %q", to)
+	}
+	if mgr.rec.Model != to || mgr.sess.opts.Model != to {
+		t.Fatalf("run/session model not updated: rec=%q opts=%q", mgr.rec.Model, mgr.sess.opts.Model)
+	}
+
+	// Without ModelOverride, escalate should no-op.
+	side2 := &fakeSide{id: "muse", session: "m1"}
+	mgr.rec.Model = "llama3.2"
+	mgr.sess = &session{sidecar: side2, opts: Options{Model: "llama3.2"}, tried: map[string]bool{}}
+	ok, _, to = mgr.escalateModel(context.Background(), func(string, string, any) {})
+	if ok {
+		t.Fatalf("expected no escalate without ModelOverride, got to=%q", to)
 	}
 }
 

@@ -91,15 +91,29 @@ The score should be pluggable per task/repository rather than pretending one uni
 
 ## Recovery ladder
 
+Default order:
+
 1. Re-anchor on unresolved goal
 2. Replan
 3. Invoke critic/debugger
-4. Switch model
+4. Switch model (native: real provider/model change; sidecars with `ModelOverride`: record + inject)
 5. Switch agent
 6. Roll back and fork alternate approach
 7. Human escalation
 
-Every intervention emits an event and records why it happened.
+Temper also **conditions the next rung on the detector family/reason** (`PreferRecovery` / `Ladder.NextFor`):
+
+| Signal | Prefer first |
+|---|---|
+| `discover:*` MCP tool-discovery loop | `human` (auth), then critic |
+| `rumination` | `switch_model` |
+| `repeated-error` | `critic` |
+| `repeated-action` / `repeated-cycle` | `replan` |
+| `token-burn` | `switch_model` |
+| `stagnation` | `replan` |
+| regression | `critic` |
+
+Exhausted preferred rungs fall through to the remaining ladder steps. Every intervention emits an event and records why it happened.
 
 ## Critical invariant
 
