@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "stop": [
+      {
+        "command": "/Users/jc/.cursor/projects/Users-jc-p-temper/.cursor-connect/cursor-connect-stop.sh",
+        "loop_limit": 5
+      }
+    ]
+  },
+  "version": 1
+}
