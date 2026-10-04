@@ -54,6 +54,20 @@ func (p Provider) AuthKey() string {
 type Agent struct {
 	Type    string `yaml:"type"`
 	Command string `yaml:"command,omitempty"`
+	// Exec-only fields (Type "exec"): argv templates rendered with
+	// {prompt}, {session}, {model}, and {workspace} placeholders.
+	Args       []string          `yaml:"args,omitempty"`
+	ResumeArgs []string          `yaml:"resume_args,omitempty"`
+	InjectArgs []string          `yaml:"inject_args,omitempty"`
+	LogFile    string            `yaml:"log_file,omitempty"`
+	Cap        AgentCapabilities `yaml:"capabilities,omitempty"`
+}
+
+// AgentCapabilities declares what a generic exec agent supports.
+type AgentCapabilities struct {
+	Tools         bool `yaml:"tools,omitempty"`
+	Resume        bool `yaml:"resume,omitempty"`
+	ModelOverride bool `yaml:"model_override,omitempty"`
 }
 
 type Arbiter struct {
@@ -145,6 +159,11 @@ type Evaluator struct {
 
 type Workspace struct {
 	Root string `yaml:"root"`
+	// BranchPrefix namespaces Temper worktree branches (default "temper/").
+	BranchPrefix string `yaml:"branch_prefix,omitempty"`
+	// BaseBranch pins the branch new task branches fork from.
+	// Empty means auto: origin/HEAD, then main/master, then HEAD.
+	BaseBranch string `yaml:"base_branch,omitempty"`
 }
 
 type Shell struct {
@@ -160,6 +179,8 @@ type Flags struct {
 	Provider string
 	Model    string
 	Session  string
+	Branch   string
+	Base     string
 }
 
 type Loaded struct {

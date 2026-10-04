@@ -56,6 +56,15 @@ func TestSplitAgentArgs(t *testing.T) {
 	if err != nil || id != "cursor" || goal != "watch this" {
 		t.Fatalf("cursor %s %q %v", id, goal, err)
 	}
+	cfg.Agents["aider"] = config.Agent{Type: "exec", Command: "aider"}
+	id, goal, err = splitAgentArgs([]string{"aider", "fix", "auth"}, cfg, "")
+	if err != nil || id != "aider" || goal != "fix auth" {
+		t.Fatalf("exec token %s %q %v", id, goal, err)
+	}
+	id, goal, err = splitAgentArgs([]string{"fix", "auth"}, cfg, "aider")
+	if err != nil || id != "aider" || goal != "fix auth" {
+		t.Fatalf("exec flag %s %q %v", id, goal, err)
+	}
 }
 
 func TestParseCursorSession(t *testing.T) {

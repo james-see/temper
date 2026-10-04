@@ -12,6 +12,8 @@ type Manager struct {
 	RepoRoot string
 	DataDir  string
 	Worktree string
+	// Prefix namespaces task branches (default "temper/").
+	Prefix string
 }
 
 func New(repoRoot, dataDir string) (*Manager, error) {
@@ -28,6 +30,13 @@ func (m *Manager) Attach() {
 }
 
 func (m *Manager) Prepare(runID string) error {
+	return m.PrepareBranch(runID, "", "")
+}
+
+// PrepareBranch creates (or reattaches) the isolated worktree for runID.
+// branch defaults to Prefix+runID; base defaults to the auto-resolved fork
+// point (see ResolveBase). An existing worktree dir is reused as-is.
+func (m *Manager) PrepareBranch(runID, branch, base string) error {
 	if err := os.MkdirAll(filepath.Join(m.DataDir, "worktrees"), 0o755); err != nil {
 		return err
 	}
@@ -40,14 +49,184 @@ func (m *Manager) Prepare(runID string) error {
 		m.Worktree = dest
 		return nil
 	}
-	branch := "temper/" + runID
-	if err := run(m.RepoRoot, "git", "worktree", "add", "-b", branch, dest, "HEAD"); err != nil {
-		if err2 := run(m.RepoRoot, "git", "worktree", "add", dest, "HEAD"); err2 != nil {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = TaskBranch(runID, m.Prefix)
+	}
+	base = ResolveBase(m.RepoRoot, base)
+	if err := run(m.RepoRoot, "git", "worktree", "add", "-b", branch, dest, base); err != nil {
+		if err2 := run(m.RepoRoot, "git", "worktree", "add", dest, base); err2 != nil {
 			return fmt.Errorf("worktree: %v / %v", err, err2)
 		}
 	}
 	m.Worktree = dest
 	return nil
+}
+
+// TaskBranch names the worktree branch for a run under prefix.
+func TaskBranch(runID, prefix string) string {
+	if strings.TrimSpace(prefix) == "" {
+		prefix = "temper/"
+	}
+	return prefix + runID
+}
+
+// ResolveBase picks the fork point for a new task branch: the explicit base
+// when given, else the remote default (origin/HEAD), else main/master when
+// present, else HEAD. It returns "" when dir is not a git repo.
+func ResolveBase(dir, base string) string {
+	if strings.TrimSpace(base) != "" {
+		return strings.TrimSpace(base)
+	}
+	if !isGit(dir) {
+		return ""
+	}
+	if out, err := output(dir, "git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"); err == nil {
+		if ref := strings.TrimSpace(out); ref != "" {
+			return strings.TrimPrefix(ref, "refs/remotes/")
+		}
+	}
+	for _, b := range []string{"origin/main", "origin/master"} {
+		if run(dir, "git", "show-ref", "--verify", "--quiet", "refs/remotes/"+b) == nil {
+			return b
+		}
+	}
+	return "HEAD"
+}
+
+// CurrentBranch reports the checked-out branch of the workspace root.
+func (m *Manager) CurrentBranch() (string, error) {
+	out, err := output(m.Root(), "git", "branch", "--show-current")
+	return strings.TrimSpace(out), err
+}
+
+// Publish pushes the workspace branch to remote (default "origin") and sets
+// the upstream, so a forge PR can target it.
+func (m *Manager) Publish(remote string) error {
+	remote = strings.TrimSpace(remote)
+	if remote == "" {
+		remote = "origin"
+	}
+	return run(m.Root(), "git", "push", "-u", remote, "HEAD")
+}
+
+// RemoveWorktree deletes the isolated worktree for runID and prunes the
+// registration. It is a no-op when the worktree dir is absent.
+func (m *Manager) RemoveWorktree(runID string) error {
+	dest := filepath.Join(m.DataDir, "worktrees", runID)
+	if _, err := os.Stat(dest); err != nil {
+		return nil
+	}
+	if isGit(m.RepoRoot) {
+		_ = run(m.RepoRoot, "git", "worktree", "remove", "--force", dest)
+		_ = run(m.RepoRoot, "git", "worktree", "prune")
+	}
+	if err := os.RemoveAll(dest); err != nil {
+		return err
+	}
+	if m.Worktree == dest {
+		m.Worktree = ""
+	}
+	return nil
+}
+
+// DiskUsage sums bytes under the isolated-worktrees dir. Missing dirs
+// report zero without an error.
+func (m *Manager) DiskUsage() (int64, error) {
+	return dirSize(filepath.Join(m.DataDir, "worktrees"))
+}
+
+// Prune deletes worktree dirs that git no longer has registered and returns
+// the removed paths with bytes freed.
+func (m *Manager) Prune() (removed []string, freed int64, err error) {
+	orphans, _, err := m.Orphans()
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, o := range orphans {
+		if rerr := os.RemoveAll(o.Path); rerr != nil {
+			return removed, freed, rerr
+		}
+		removed = append(removed, o.Path)
+		freed += o.Bytes
+	}
+	return removed, freed, nil
+}
+
+// Orphan is a worktree dir git no longer has registered.
+type Orphan struct {
+	Path  string
+	Bytes int64
+}
+
+// Orphans lists worktree dirs git no longer has registered, with their sizes.
+// It deletes nothing; Prune removes what Orphans reports.
+func (m *Manager) Orphans() ([]Orphan, int64, error) {
+	if isGit(m.RepoRoot) {
+		_ = run(m.RepoRoot, "git", "worktree", "prune")
+	}
+	registered := map[string]bool{}
+	if isGit(m.RepoRoot) {
+		if out, oerr := output(m.RepoRoot, "git", "worktree", "list", "--porcelain"); oerr == nil {
+			for _, line := range strings.Split(out, "\n") {
+				if p := strings.TrimSpace(strings.TrimPrefix(line, "worktree ")); p != "" && p != line {
+					// Git reports canonical paths (symlinks resolved, e.g.
+					// /private/var on macOS); index both forms so callers
+					// holding unresolved paths still match.
+					p = filepath.Clean(p)
+					registered[p] = true
+					if rp, rerr := filepath.EvalSymlinks(p); rerr == nil {
+						registered[rp] = true
+					}
+				}
+			}
+		}
+	}
+	base := filepath.Join(m.DataDir, "worktrees")
+	entries, rerr := os.ReadDir(base)
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return nil, 0, nil
+		}
+		return nil, 0, rerr
+	}
+	var out []Orphan
+	var total int64
+	for _, e := range entries {
+		p := filepath.Join(base, e.Name())
+		if registered[filepath.Clean(p)] {
+			continue
+		}
+		if rp, rerr := filepath.EvalSymlinks(p); rerr == nil && registered[rp] {
+			continue
+		}
+		size, _ := dirSize(p)
+		out = append(out, Orphan{Path: p, Bytes: size})
+		total += size
+	}
+	return out, total, nil
+}
+
+func dirSize(root string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !d.IsDir() {
+			if fi, ferr := d.Info(); ferr == nil {
+				total += fi.Size()
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 func (m *Manager) Root() string {

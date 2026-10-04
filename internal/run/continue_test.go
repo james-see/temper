@@ -262,3 +262,25 @@ func TestPickHandoffAgent(t *testing.T) {
 		t.Fatalf("%s %v", to, ok)
 	}
 }
+
+func TestPickHandoffAgentIncludesExec(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Agents = map[string]config.Agent{
+		"hermes":      {Type: "disabled"},
+		"opencode":    {Type: "disabled"},
+		"muse":        {Type: "disabled"},
+		"goose":       {Type: "disabled"},
+		"claude-code": {Type: "disabled"},
+		"codex":       {Type: "disabled"},
+		"cursor":      {Type: "disabled"},
+		"aider":       {Type: "exec", Command: "aider"},
+	}
+	to, ok := pickHandoffAgent(cfg, "muse")
+	if !ok || to != "aider" {
+		t.Fatalf("exec handoff target %q %v", to, ok)
+	}
+	// The current exec agent is skipped like first-class agents.
+	if to, ok := pickHandoffAgent(cfg, "aider"); ok {
+		t.Fatalf("must not hand off to self: %q", to)
+	}
+}

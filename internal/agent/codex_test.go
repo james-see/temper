@@ -11,11 +11,60 @@ import (
 	"github.com/james-see/temper/internal/term"
 )
 
+func TestParseCodexRolloutEnvelope(t *testing.T) {
+	// Real envelope shapes from codex-cli 0.154+ session rollouts:
+	// {"timestamp","ordinal","type","payload"}. Items are the ingested stream;
+	// message payloads are skipped to avoid doubling turns.
+	log := strings.Join([]string{
+		`{"timestamp":"2026-10-03T20:25:24.042Z","ordinal":0,"type":"session_meta","payload":{"type":"session_meta","session_id":"ses-1","cwd":"/tmp/ws"}}`,
+		`{"timestamp":"2026-10-03T20:25:24.100Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}`,
+		`{"timestamp":"2026-10-03T20:25:24.200Z","ordinal":2,"type":"response_item","payload":{"type":"message","id":"msg-1","role":"user","content":[{"type":"input_text","text":"fix auth"}]}}`,
+		`{"timestamp":"2026-10-03T20:25:24.300Z","ordinal":3,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u-1","content":[{"type":"text","text":"fix auth"}]}}}`,
+		`{"timestamp":"2026-10-03T20:25:24.400Z","ordinal":4,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Reasoning","id":"rs-1","summary_text":["look around first"],"raw_content":[]}}}`,
+		`{"timestamp":"2026-10-03T20:25:24.500Z","ordinal":5,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"call-1","command":["/bin/zsh"],"parsed_cmd":[{"type":"unknown","cmd":"go test ./..."}],"status":"completed","stdout":"ok","stderr":"","aggregated_output":"ok","exit_code":0}}}`,
+		`{"timestamp":"2026-10-03T20:25:24.600Z","ordinal":6,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"call-2","server":"vala","tool":"list_clients","arguments":{"limit":5},"status":"completed","result":{"content":"[]"}}}}`,
+		`{"timestamp":"2026-10-03T20:25:24.700Z","ordinal":7,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a-1","content":[{"type":"Text","text":"done"}]}}}`,
+		`{"timestamp":"2026-10-03T20:25:24.800Z","ordinal":8,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","error":null}}`,
+		`{"timestamp":"2026-10-03T20:25:25.000Z","ordinal":9,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"call-3","command":["/bin/zsh"],"status":"failed","stdout":"","stderr":"boom","aggregated_output":"","exit_code":1}}}`,
+		`{"timestamp":"2026-10-03T20:25:25.100Z","ordinal":10,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2","error":{"message":"turn blew up"}}}`,
+	}, "\n")
+	ings, cur := parseCodexJSONL(log, codexCursor{})
+	if cur.n != 11 {
+		t.Fatalf("n=%d", cur.n)
+	}
+	var types []string
+	for _, ing := range ings {
+		types = append(types, ing.Type)
+	}
+	got := strings.Join(types, ",")
+	// No duplicate from the response_item/message line (ordinal 2).
+	want := "user.message,model.thinking,tool.completed,tool.completed,model.completed,tool.completed,tool.completed"
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+	shell := ings[2].Data
+	if shell["tool"] != "shell" || shell["args"] != "go test ./..." || shell["output"] != "ok" {
+		t.Fatalf("shell item %+v", shell)
+	}
+	if _, hasErr := shell["error"]; hasErr {
+		t.Fatalf("clean command must not set error: %+v", shell)
+	}
+	mcp := ings[3].Data
+	if mcp["tool"] != "vala/list_clients" {
+		t.Fatalf("mcp item %+v", mcp)
+	}
+	failed := ings[5].Data
+	if failed["error"] != "boom" {
+		t.Fatalf("failed command must carry stderr: %+v", failed)
+	}
+	turnErr := ings[6].Data
+	if turnErr["error"] != "turn blew up" {
+		t.Fatalf("task_complete error must surface: %+v", turnErr)
+	}
+}
+
 func TestParseCodexJSONL(t *testing.T) {
-	// Synthetic fixture shaped like Codex session rollouts + exec --json events.
-	// Capture a real one later with:
-	//   CODEX_HOME=/tmp/cx codex exec --json "hi"
-	// then copy $CODEX_HOME/sessions/**/*.jsonl.
+	// Synthetic fixture shaped like exec --json events plus bare records.
 	log := strings.Join([]string{
 		`{"type":"thread.started","thread_id":"abc"}`,
 		`{"type":"user","role":"user","content":[{"type":"text","text":"fix auth"}]}`,

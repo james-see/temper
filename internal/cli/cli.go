@@ -39,6 +39,8 @@ func root() *cobra.Command {
 		prov    string
 		model   string
 		session string
+		branch  string
+		base    string
 	)
 	cmd := &cobra.Command{
 		Use:           "temper",
@@ -48,7 +50,7 @@ func root() *cobra.Command {
 		Args:          cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), args, config.Flags{
-				Plain: plain, Debug: debug, Config: cfgPath, Agent: agent, Provider: prov, Model: model, Session: session,
+				Plain: plain, Debug: debug, Config: cfgPath, Agent: agent, Provider: prov, Model: model, Session: session, Branch: branch, Base: base,
 			})
 		},
 	}
@@ -59,30 +61,37 @@ func root() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&prov, "provider", "", "provider id")
 	cmd.PersistentFlags().StringVar(&model, "model", "", "model id")
 	cmd.PersistentFlags().StringVar(&session, "session", "", "attach a harness session id, or all")
+	cmd.PersistentFlags().StringVar(&branch, "branch", "", "task branch (default: temper/<run-id>)")
+	cmd.PersistentFlags().StringVar(&base, "base", "", "fork new task branches from here (default: repo default)")
 
-	cmd.AddCommand(runCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session))
-	cmd.AddCommand(debugCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session))
+	cmd.AddCommand(runCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session, &branch, &base))
+	cmd.AddCommand(debugCmd(&plain, &debug, &cfgPath, &agent, &prov, &model, &session, &branch, &base))
 	cmd.AddCommand(continueCmd(&plain, &debug, &cfgPath))
 	cmd.AddCommand(inspectCmd(&plain, &cfgPath))
 	cmd.AddCommand(configCmd(&cfgPath))
+	cmd.AddCommand(prCmd(&cfgPath))
+	cmd.AddCommand(archiveCmd(&cfgPath))
+	cmd.AddCommand(restoreCmd(&cfgPath))
+	cmd.AddCommand(deleteCmd(&cfgPath))
+	cmd.AddCommand(workspaceCmd(&cfgPath))
 	cmd.AddCommand(versionCmd())
 	return cmd
 }
 
-func runCmd(plain, debug *bool, cfgPath, agent, prov, model, session *string) *cobra.Command {
+func runCmd(plain, debug *bool, cfgPath, agent, prov, model, session, branch, base *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run [goal]",
 		Short: "Execute a supervised coding run",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), args, config.Flags{
-				Plain: *plain, Debug: *debug, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model, Session: *session,
+				Plain: *plain, Debug: *debug, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model, Session: *session, Branch: *branch, Base: *base,
 			})
 		},
 	}
 }
 
-func debugCmd(plain, debug *bool, cfgPath, agent, prov, model, session *string) *cobra.Command {
+func debugCmd(plain, debug *bool, cfgPath, agent, prov, model, session, branch, base *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "debug [goal]",
 		Short: "Same as temper, with verbose debug logging",
@@ -90,7 +99,7 @@ func debugCmd(plain, debug *bool, cfgPath, agent, prov, model, session *string) 
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doRun(cmd.Context(), args, config.Flags{
-				Plain: *plain, Debug: true, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model, Session: *session,
+				Plain: *plain, Debug: true, Config: *cfgPath, Agent: *agent, Provider: *prov, Model: *model, Session: *session, Branch: *branch, Base: *base,
 			})
 		},
 	}
@@ -281,7 +290,7 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 	}
 
 	if plain {
-		if agent.IsExternal(flags.Agent) {
+		if agent.IsExternalCfg(flags.Agent, loaded.Config) {
 			switch agent.TypeOf(flags.Agent) {
 			case "cursor":
 				fmt.Fprintf(os.Stdout, "watching Cursor IDE transcripts for %s via cursor-connect (unofficial; not affiliated with Cursor)\n", root)
@@ -319,6 +328,16 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 				}
 				fmt.Fprintln(os.Stdout)
 			default:
+				if spec, ok := agent.ExecSpec(flags.Agent, loaded.Config); ok {
+					_, sess, _ := parseCursorSession(flags.Session)
+					cmd := spec.Command
+					if strings.TrimSpace(cmd) == "" {
+						cmd = flags.Agent
+					}
+					argv := agent.RenderExecCommand(spec, cmd, goal, sess, flags.Model, root)
+					fmt.Fprintf(os.Stdout, "open a terminal in %s and run:\n  %s\n", root, strings.Join(argv, " "))
+					break
+				}
 				fmt.Fprintf(os.Stdout, "open a terminal and run:\n  hermes --tui --in %s --source temper\n", root)
 				if strings.TrimSpace(goal) != "" {
 					fmt.Fprintf(os.Stdout, "  (seed) hermes chat --tui --in %s --source temper -q %q\n", root, goal)
@@ -329,6 +348,7 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 			opts := run.Options{
 				Goal: goal, Root: root, Agent: flags.Agent, Plain: true, SkipSpawn: true,
 				CursorSession: sess, CursorAttachAll: all,
+				Branch: flags.Branch, BaseBranch: flags.Base,
 			}
 			if all && agent.TypeOf(flags.Agent) != "cursor" {
 				picks, _ := agent.LiveSessionPicks(runCtx, agent.TypeOf(flags.Agent))
@@ -365,6 +385,7 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		go printLive(runCtx, mgr)
 		_, err := mgr.Execute(runCtx, run.Options{
 			Goal: goal, Root: root, Agent: flags.Agent, Provider: prov, Model: flags.Model, Plain: true,
+			Branch: flags.Branch, BaseBranch: flags.Base,
 		})
 		return err
 	}
@@ -376,12 +397,14 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 				agentID = flags.Agent
 			}
 			opts := run.Options{
-				Goal:     g,
-				Root:     root,
-				Agent:    agentID,
-				Provider: prov,
-				Model:    model,
-				Plain:    false,
+				Goal:       g,
+				Root:       root,
+				Agent:      agentID,
+				Provider:   prov,
+				Model:      model,
+				Plain:      false,
+				Branch:     flags.Branch,
+				BaseBranch: flags.Base,
 			}
 			switch {
 			case attach.Native:
@@ -420,6 +443,7 @@ func doRun(ctx context.Context, args []string, flags config.Flags) error {
 		Agent:      flags.Agent,
 		Provider:   flags.Provider,
 		Model:      flags.Model,
+		Config:     loaded.Config,
 		Hub:        mgr.Hub,
 		Cancel:     cancel,
 		OnStart:    start,

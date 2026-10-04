@@ -56,6 +56,19 @@ agents:
   native:
     type: temper
 
+  # Generic exec adapter (VAL-2607): any other agent CLI, no Temper release.
+  # {prompt} {session} {model} {workspace} expand when argv renders.
+  # aider:
+  #   type: exec
+  #   command: aider
+  #   args: ["--no-auto-commits", "{prompt}"]
+  #   resume_args: ["--restore", "{session}"]
+  #   inject_args: ["--message", "{prompt}"]
+  #   log_file: "~/.aider/history/{session}.jsonl"
+  #   capabilities:
+  #     tools: true
+  #     resume: true
+
 arbiter:
   policies:
     - match:
@@ -121,3 +134,11 @@ reflex:
     model: oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU
     endpoint: ""
     auto_pull: true
+
+workspace:
+  root: .
+  # Task branches default to <branch_prefix><run-id>; override per run with
+  # `temper run --branch`. Base resolution: --base flag, then base_branch,
+  # then the repo default (origin/HEAD, main/master, HEAD).
+  branch_prefix: temper/
+  base_branch: ""

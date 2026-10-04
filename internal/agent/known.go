@@ -51,6 +51,35 @@ func IsNative(id string) bool {
 	return TypeOf(id) == "temper" || Normalize(id) == "" || Normalize(id) == "native"
 }
 
+// ExecSpec returns the configured generic-exec spec for id, if any.
+func ExecSpec(id string, cfg config.Config) (config.Agent, bool) {
+	id = Normalize(id)
+	if id == "" || cfg.Agents == nil {
+		return config.Agent{}, false
+	}
+	a, ok := cfg.Agents[id]
+	if !ok || !strings.EqualFold(strings.TrimSpace(a.Type), "exec") {
+		return config.Agent{}, false
+	}
+	return a, true
+}
+
+// IsExec reports whether id names a configured generic-exec agent.
+func IsExec(id string, cfg config.Config) bool {
+	_, ok := ExecSpec(id, cfg)
+	return ok
+}
+
+// ImplementedCfg extends Implemented with configured generic-exec agents.
+func ImplementedCfg(id string, cfg config.Config) bool {
+	return Implemented(id) || IsExec(id, cfg)
+}
+
+// IsExternalCfg extends IsExternal with configured generic-exec agents.
+func IsExternalCfg(id string, cfg config.Config) bool {
+	return IsExternal(id) || IsExec(id, cfg)
+}
+
 func IsExternal(id string) bool {
 	id = Normalize(id)
 	if id == "" || IsNative(id) {

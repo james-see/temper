@@ -116,12 +116,15 @@ func (m *Manager) openSidecar(opts Options, dec arbiter.Decision) (agent.Sidecar
 		}
 		return opts.Hermes, "session+logs", nil
 	}
-	targets, err := resolveAttachTargets(opts, dec.Selected.Agent)
+	targets, err := resolveAttachTargets(opts, dec.Selected.Agent, m.Cfg)
 	if err != nil {
 		return nil, "", err
 	}
 	if len(targets) > 0 {
 		return m.openAttached(opts, targets)
+	}
+	if spec, ok := agent.ExecSpec(dec.Selected.Agent, m.Cfg); ok {
+		return agent.NewExec(dec.Selected.Agent, spec, !opts.SkipSpawn), "session+logs", nil
 	}
 	typ := agent.TypeOf(dec.Selected.Agent)
 	switch typ {
@@ -244,12 +247,19 @@ func (m *Manager) startAttached(opts Options, t agent.SessionPick) (agent.Sideca
 		}
 		return cx, "session+logs", nil
 	default:
+		if spec, ok := agent.ExecSpec(t.Agent, m.Cfg); ok {
+			x := agent.NewExec(t.Agent, spec, false)
+			if _, err := x.Start(context.Background(), req); err != nil {
+				return nil, "", err
+			}
+			return x, "session+logs", nil
+		}
 		return nil, "", agent.UnimplementedError(t.Agent)
 	}
 }
 
 func (m *Manager) openCursor(opts Options) (agent.Sidecar, string, error) {
-	targets, err := resolveCursorTargets(opts)
+	targets, err := resolveCursorTargets(opts, m.Cfg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -263,12 +273,12 @@ func (m *Manager) openCursor(opts Options) (agent.Sidecar, string, error) {
 	return m.openAttached(opts, picks)
 }
 
-func resolveAttachTargets(opts Options, selectedAgent string) ([]agent.SessionPick, error) {
+func resolveAttachTargets(opts Options, selectedAgent string, cfg config.Config) ([]agent.SessionPick, error) {
 	if len(opts.AttachTargets) > 0 {
 		return opts.AttachTargets, nil
 	}
 	// Legacy cursor-only fields.
-	cps, err := resolveCursorTargets(opts)
+	cps, err := resolveCursorTargets(opts, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +303,7 @@ func resolveAttachTargets(opts Options, selectedAgent string) ([]agent.SessionPi
 	return out, nil
 }
 
-func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
+func resolveCursorTargets(opts Options, cfg config.Config) ([]agent.CursorPick, error) {
 	if len(opts.CursorTargets) > 0 {
 		return opts.CursorTargets, nil
 	}
@@ -304,11 +314,17 @@ func resolveCursorTargets(opts Options) ([]agent.CursorPick, error) {
 		if typ != "" && typ != "cursor" {
 			return nil, nil
 		}
+		if agent.IsExec(opts.Agent, cfg) {
+			return nil, nil
+		}
 		return agent.LiveCursorPicks()
 	}
 	if sess != "" {
 		typ := agent.TypeOf(opts.Agent)
 		if typ == "hermes" || typ == "opencode" || typ == "muse" || typ == "goose" || typ == "claude-code" || typ == "codex" {
+			return nil, nil
+		}
+		if agent.IsExec(opts.Agent, cfg) {
 			return nil, nil
 		}
 		if opts.CursorWorkspace != "" {

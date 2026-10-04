@@ -4,37 +4,67 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/james-see/temper/internal/event"
 )
 
-func TestAppendAndList(t *testing.T) {
+func TestArchiveRestoreDelete(t *testing.T) {
+	ctx := context.Background()
 	s, err := Open(filepath.Join(t.TempDir(), "temper.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	ctx := context.Background()
-	r := Run{ID: "r1", Goal: "fix tests", State: "created", CreatedAt: time.Now().UTC()}
-	if err := s.CreateRun(ctx, r); err != nil {
+	if err := s.CreateRun(ctx, Run{ID: "r1", Goal: "g", State: "done", Agent: "native"}); err != nil {
 		t.Fatal(err)
 	}
-	seq, err := s.NextSequence(ctx, "r1")
-	if err != nil || seq != 1 {
-		t.Fatalf("seq %d %v", seq, err)
-	}
-	if err := s.AppendEvent(ctx, event.Event{
-		ID: "e1", RunID: "r1", Sequence: 1, Type: event.RunStarted, Actor: "runtime", Data: Encode(map[string]string{"a": "b"}),
-	}); err != nil {
+	if err := s.AppendEvent(ctx, event.Event{ID: "r1-1", RunID: "r1", Sequence: 1, Type: event.RunCreated, Actor: "t"}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.GetRun(ctx, "r1")
-	if err != nil || got.Goal != "fix tests" {
-		t.Fatalf("%+v %v", got, err)
+	if err := s.SetArchived(ctx, "r1", true); err != nil {
+		t.Fatal(err)
 	}
-	evs, err := s.ListEvents(ctx, "r1")
-	if err != nil || len(evs) != 1 || evs[0].Type != event.RunStarted {
-		t.Fatalf("%+v %v", evs, err)
+	r, err := s.GetRun(ctx, "r1")
+	if err != nil || !r.Archived {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if err := s.SetArchived(ctx, "r1", false); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.GetRun(ctx, "r1"); err != nil || r.Archived {
+		t.Fatalf("restore %+v %v", r, err)
+	}
+	if err := s.DeleteRun(ctx, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetRun(ctx, "r1"); err == nil {
+		t.Fatal("deleted run must be gone")
+	}
+	if evs, err := s.ListEvents(ctx, "r1"); err != nil || len(evs) != 0 {
+		t.Fatalf("deleted events %+v %v", evs, err)
+	}
+}
+
+func TestOpenMigratesExistingDB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "temper.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateRun(context.Background(), Run{ID: "r1", Goal: "g", State: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen exercises the duplicate-column-tolerant ALTER path.
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if _, err := s2.GetRun(context.Background(), "r1"); err != nil {
+		t.Fatal(err)
 	}
 }

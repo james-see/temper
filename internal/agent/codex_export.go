@@ -25,11 +25,12 @@ type codexSessionRow struct {
 const codexLiveWindow = 30 * time.Minute
 
 // parseCodexJSONL maps Codex session rollouts / exec --json events into Temper ingests.
-// Capture a real fixture later with:
 //
-//	CODEX_HOME=/tmp/cx codex exec --json "hi"
-//
-// then copy $CODEX_HOME/sessions/**/*.jsonl.
+// Real rollouts (codex-cli 0.154+) wrap every record in a
+// {"timestamp","ordinal","type","payload"} envelope. The payload stream carries
+// response_item/message turns plus event_msg/item_completed items; items are the
+// complete activity record (messages, reasoning, tool calls), so message
+// payloads are deliberately skipped to avoid double ingestion.
 func parseCodexJSONL(out string, cur codexCursor) ([]Ingest, codexCursor) {
 	lines := splitNonEmpty(out)
 	if len(lines) == 0 {
@@ -84,11 +85,187 @@ func ingestCodexRecord(raw map[string]any) []Ingest {
 		}
 	}
 	if payload, ok := raw["payload"].(map[string]any); ok {
+		if out, handled := ingestCodexPayload(payload); handled {
+			return out
+		}
 		if nested := ingestCodexRecord(payload); len(nested) > 0 {
 			return nested
 		}
 	}
 	return ingestCodexMessage(raw)
+}
+
+// ingestCodexPayload handles the real rollout payload event types. It reports
+// handled=true when the payload type is known, even when it yields no ingest,
+// so envelope-only records (turn markers, config snapshots) short-circuit
+// instead of falling through to message heuristics.
+func ingestCodexPayload(payload map[string]any) ([]Ingest, bool) {
+	if item, ok := payload["item"].(map[string]any); ok {
+		return ingestCodexRolloutItem(item), true
+	}
+	switch strings.ToLower(firstString(payload, "type")) {
+	case "item_completed", "item_started", "item_updated":
+		return nil, true
+	case "task_complete":
+		if em, ok := payload["error"].(map[string]any); ok {
+			if msg := firstString(em, "message"); msg != "" {
+				return []Ingest{{Type: "tool.completed", Data: map[string]any{"tool": "codex", "error": clip(msg, 400), "output": msg}}}, true
+			}
+		}
+		return nil, true
+	case "message":
+		// Covered by the item stream (UserMessage/AgentMessage); ingesting
+		// here too would double every turn for Reflex detectors.
+		return nil, true
+	case "task_started", "token_count", "thread_settings_applied",
+		"session_meta", "turn_context", "world_state":
+		return nil, true
+	}
+	return nil, false
+}
+
+// ingestCodexRolloutItem maps one rollout item_completed item to ingests.
+// Observed item types: UserMessage, AgentMessage, Reasoning, McpToolCall,
+// CommandExecution, WebSearch, ImageView.
+func ingestCodexRolloutItem(item map[string]any) []Ingest {
+	switch strings.ToLower(firstString(item, "type")) {
+	case "usermessage", "user_message", "user":
+		if text := codexItemText(item); text != "" {
+			return []Ingest{{Type: "user.message", Data: map[string]any{"text": text}}}
+		}
+		return nil
+	case "agentmessage", "agent_message", "assistant":
+		if text := codexItemText(item); text != "" {
+			return []Ingest{{Type: "model.completed", Data: map[string]any{"content": text}}}
+		}
+		return nil
+	case "reasoning":
+		if text := codexSummaryText(item); text != "" {
+			return []Ingest{thinkingIngest(len(text), len(text), nil, false, text)}
+		}
+		return nil
+	case "mcptoolcall", "mcp_tool_call":
+		name := firstString(item, "tool")
+		if srv := firstString(item, "server"); srv != "" && name != "" {
+			name = srv + "/" + name
+		}
+		data := map[string]any{"tool": nzTool(name, "mcp"), "args": codexArgsString(item["arguments"])}
+		out := ""
+		if res, ok := item["result"].(map[string]any); ok {
+			out = codexArgsString(res["content"])
+			if out == "" {
+				out = codexArgsString(item["result"])
+			}
+		}
+		data["output"] = out
+		if st := strings.ToLower(firstString(item, "status")); strings.Contains(st, "fail") || strings.Contains(st, "error") {
+			data["error"] = clip(out, 400)
+		}
+		return []Ingest{{Type: "tool.completed", Data: data}}
+	case "commandexecution", "command_execution":
+		args := codexParsedCommand(item)
+		if args == "" {
+			args = codexArgsString(item["command"])
+		}
+		out := firstString(item, "aggregated_output", "stdout", "formatted_output")
+		data := map[string]any{"tool": "shell", "args": args, "output": out}
+		failed := false
+		switch n := item["exit_code"].(type) {
+		case float64:
+			failed = n != 0
+		case int:
+			failed = n != 0
+		}
+		if st := strings.ToLower(firstString(item, "status")); strings.Contains(st, "fail") || strings.Contains(st, "error") {
+			failed = true
+		}
+		if failed {
+			if errText := firstString(item, "stderr"); errText != "" {
+				data["error"] = clip(errText, 400)
+			} else {
+				data["error"] = clip(out, 400)
+			}
+		}
+		return []Ingest{{Type: "tool.completed", Data: data}}
+	case "websearch", "web_search":
+		return []Ingest{{Type: "tool.completed", Data: map[string]any{"tool": "web_search", "args": firstString(item, "query"), "output": ""}}}
+	case "imageview", "image_view":
+		return []Ingest{{Type: "tool.completed", Data: map[string]any{"tool": "image_view", "args": firstString(item, "path"), "output": ""}}}
+	default:
+		return nil
+	}
+}
+
+// codexItemText joins the text blocks of a UserMessage/AgentMessage item.
+// Block types are "text"/"Text" in items (vs "input_text"/"output_text" in
+// message payloads, which are skipped for dedup).
+func codexItemText(item map[string]any) string {
+	if s, ok := item["content"].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	arr, ok := item["content"].([]any)
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	for _, e := range arr {
+		blk, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(firstString(blk, "type"), "text") {
+			continue
+		}
+		if s := firstString(blk, "text"); s != "" {
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(s)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// codexSummaryText joins a Reasoning item's summary_text list.
+func codexSummaryText(item map[string]any) string {
+	var b strings.Builder
+	if arr, ok := item["summary_text"].([]any); ok {
+		for _, e := range arr {
+			if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(strings.TrimSpace(s))
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return strings.TrimSpace(firstString(item, "text", "content"))
+	}
+	return b.String()
+}
+
+// codexParsedCommand extracts the readable command from a CommandExecution item.
+func codexParsedCommand(item map[string]any) string {
+	if arr, ok := item["parsed_cmd"].([]any); ok {
+		for _, e := range arr {
+			if m, ok := e.(map[string]any); ok {
+				if s := firstString(m, "cmd", "command"); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	if arr, ok := item["command"].([]any); ok {
+		var parts []string
+		for _, e := range arr {
+			if s, ok := e.(string); ok {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	return ""
 }
 
 func ingestCodexItem(typ string, raw map[string]any) []Ingest {

@@ -13,7 +13,7 @@ func splitAgentArgs(args []string, cfg config.Config, flagAgent string) (agentID
 		if !ok {
 			id, typ = agent.Normalize(flagAgent), agent.TypeOf(flagAgent)
 		}
-		if ok && !agent.Implemented(id) && typ != "temper" {
+		if ok && !agent.ImplementedCfg(id, cfg) && typ != "temper" {
 			return id, strings.Join(args, " "), agent.UnimplementedError(id)
 		}
 		if !ok && !agent.Implemented(flagAgent) && agent.IsKnown(flagAgent) {
@@ -28,7 +28,7 @@ func splitAgentArgs(args []string, cfg config.Config, flagAgent string) (agentID
 	if !ok {
 		return "", strings.Join(args, " "), nil
 	}
-	if !agent.Implemented(id) && typ != "temper" {
+	if !agent.ImplementedCfg(id, cfg) && typ != "temper" {
 		return id, strings.Join(args[1:], " "), agent.UnimplementedError(id)
 	}
 	return id, strings.Join(args[1:], " "), nil

@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/james-see/temper/internal/agent"
+	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/run"
@@ -85,6 +86,7 @@ type Options struct {
 	Agent        string
 	Provider     string
 	Model        string
+	Config       config.Config
 	Hub          *run.Hub
 	Cancel       context.CancelFunc
 	Inspect      bool
@@ -157,7 +159,7 @@ func New(opts Options) Model {
 		agent:        opts.Agent,
 		provider:     opts.Provider,
 		model:        opts.Model,
-		external:     agent.IsExternal(opts.Agent),
+		external:     agent.IsExternalCfg(opts.Agent, opts.Config),
 		onMode:       opts.OnMode,
 		onApprove:    opts.OnApprove,
 		hub:          opts.Hub,
@@ -228,8 +230,12 @@ func (m Model) fetchSessionPicks() tea.Cmd {
 func (m Model) advanceSetup() (Model, tea.Cmd) {
 	// Pre-bound session (CLI --session) skips picker.
 	if m.external && m.cursorSess != "" {
+		attachAgent := agent.TypeOf(m.agent)
+		if attachAgent == "" {
+			attachAgent = agent.Normalize(m.agent)
+		}
 		m.attach = AttachSpec{Targets: []agent.SessionPick{{
-			Agent: agent.TypeOf(m.agent), SessionID: m.cursorSess, Workspace: m.cursorWS,
+			Agent: attachAgent, SessionID: m.cursorSess, Workspace: m.cursorWS,
 		}}}
 		if m.cursorSess == "*" || strings.EqualFold(m.cursorSess, "all") {
 			m.attach = AttachSpec{} // runtime resolves attach-all for cursor

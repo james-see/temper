@@ -47,4 +47,14 @@ const (
 	RecoveryStarted    = "recovery.started"
 	RecoveryCompleted  = "recovery.completed"
 	RecoveryFailed     = "recovery.failed"
+
+	BranchPublished = "branch.published"
+	PRCreated       = "pr.created"
+	PRSynced        = "pr.synced"
+	ChecksReported  = "checks.reported"
+
+	TaskArchived  = "task.archived"
+	TaskRestored  = "task.restored"
+	TaskDeleted   = "task.deleted"
+	WorktreeClean = "worktree.cleaned"
 )

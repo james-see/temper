@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/james-see/temper/internal/event"
@@ -19,6 +20,7 @@ type Run struct {
 	Provider  string
 	Model     string
 	Workspace string
+	Archived  bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS runs (
 	provider TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
 	workspace TEXT NOT NULL DEFAULT '',
+	archived INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 );
@@ -69,7 +72,15 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_run_seq ON events(run_id, sequence);
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	// Best-effort column for databases created before archiving existed.
+	if _, err := s.db.Exec(`ALTER TABLE runs ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) CreateRun(ctx context.Context, r Run) error {
@@ -78,9 +89,9 @@ func (s *Store) CreateRun(ctx context.Context, r Run) error {
 	}
 	r.UpdatedAt = r.CreatedAt
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO runs (id, goal, state, agent, provider, model, workspace, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, r.Goal, r.State, r.Agent, r.Provider, r.Model, r.Workspace,
+INSERT INTO runs (id, goal, state, agent, provider, model, workspace, archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.Goal, r.State, r.Agent, r.Provider, r.Model, r.Workspace, boolInt(r.Archived),
 		r.CreatedAt.Format(time.RFC3339Nano), r.UpdatedAt.Format(time.RFC3339Nano))
 	return err
 }
@@ -88,23 +99,48 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 func (s *Store) UpdateRun(ctx context.Context, r Run) error {
 	r.UpdatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
-UPDATE runs SET goal = ?, state = ?, agent = ?, provider = ?, model = ?, workspace = ?, updated_at = ?
+UPDATE runs SET goal = ?, state = ?, agent = ?, provider = ?, model = ?, workspace = ?, archived = ?, updated_at = ?
 WHERE id = ?`,
-		r.Goal, r.State, r.Agent, r.Provider, r.Model, r.Workspace,
+		r.Goal, r.State, r.Agent, r.Provider, r.Model, r.Workspace, boolInt(r.Archived),
 		r.UpdatedAt.Format(time.RFC3339Nano), r.ID)
 	return err
+}
+
+// SetArchived flags a run archived (or restores it when archived is false).
+func (s *Store) SetArchived(ctx context.Context, id string, archived bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET archived = ?, updated_at = ? WHERE id = ?`,
+		boolInt(archived), time.Now().UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+// DeleteRun removes a run and its events.
+func (s *Store) DeleteRun(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE run_id = ?`, id); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM runs WHERE id = ?`, id)
+	return err
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 	var r Run
 	var created, updated string
+	var archived int
 	err := s.db.QueryRowContext(ctx, `
-SELECT id, goal, state, agent, provider, model, workspace, created_at, updated_at
+SELECT id, goal, state, agent, provider, model, workspace, archived, created_at, updated_at
 FROM runs WHERE id = ?`, id).Scan(
-		&r.ID, &r.Goal, &r.State, &r.Agent, &r.Provider, &r.Model, &r.Workspace, &created, &updated)
+		&r.ID, &r.Goal, &r.State, &r.Agent, &r.Provider, &r.Model, &r.Workspace, &archived, &created, &updated)
 	if err != nil {
 		return Run{}, err
 	}
+	r.Archived = archived != 0
 	r.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	r.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	return r, nil

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/james-see/temper/internal/agent"
@@ -258,6 +259,7 @@ func handoffAgentOrder() []string {
 }
 
 func pickHandoffAgent(cfg config.Config, current string) (string, bool) {
+	orig := agent.Normalize(current)
 	current = agent.TypeOf(current)
 	if current == "" {
 		current = agent.Normalize(current)
@@ -276,7 +278,30 @@ func pickHandoffAgent(cfg config.Config, current string) (string, bool) {
 		}
 		return id, true
 	}
+	for _, id := range execAgentOrder(cfg) {
+		if id == current || id == orig {
+			continue
+		}
+		return id, true
+	}
 	return "", false
+}
+
+// execAgentOrder lists configured generic-exec agent ids in sorted order so
+// switch_agent handoff can target them deterministically.
+func execAgentOrder(cfg config.Config) []string {
+	var out []string
+	for id, a := range cfg.Agents {
+		if !strings.EqualFold(strings.TrimSpace(a.Type), "exec") {
+			continue
+		}
+		if agent.IsKnown(id) {
+			continue
+		}
+		out = append(out, agent.Normalize(id))
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (m *Manager) handoffDigest() string {

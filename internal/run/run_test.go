@@ -17,6 +17,7 @@ import (
 	"github.com/james-see/temper/internal/provider"
 	"github.com/james-see/temper/internal/reflex"
 	"github.com/james-see/temper/internal/store"
+	"github.com/james-see/temper/internal/workspace"
 )
 
 func TestExecuteDetectsLoop(t *testing.T) {
@@ -511,9 +512,45 @@ func initGit(t *testing.T, dir string) {
 	run("git", "init")
 	run("git", "config", "user.email", "t@t")
 	run("git", "config", "user.name", "t")
+	run("git", "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	run("git", "add", "README")
 	run("git", "commit", "-m", "init")
+}
+
+func TestPrepareWorkspaceBranchStrategy(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Workspace.BranchPrefix = "task/"
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	ws, err := workspace.New(dir, config.DataDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.prepareWorkspace(ws, "r1", Options{}); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := ws.CurrentBranch()
+	if err != nil || branch != "task/r1" {
+		t.Fatalf("prefix branch %q %v", branch, err)
+	}
+	ws2, err := workspace.New(dir, config.DataDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.prepareWorkspace(ws2, "r2", Options{Branch: "feat/custom"}); err != nil {
+		t.Fatal(err)
+	}
+	branch, err = ws2.CurrentBranch()
+	if err != nil || branch != "feat/custom" {
+		t.Fatalf("explicit branch %q %v", branch, err)
+	}
 }

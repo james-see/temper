@@ -13,7 +13,7 @@ Temper separates **agent runtimes**, **model providers**, **tools/protocols**, *
 | Cursor Agents | P0 | Wired as Sidecar via cursor-connect; live session attach |
 | Hermes Agent | P0 | Wired as Sidecar (session export + logs); live session attach |
 | Temper Native | P0 | Minimal native agent loop for direct provider execution |
-| Generic `exec` | P0 | Allows unsupported agent CLIs to be configured without a Temper release |
+| Generic `exec` | P0 | Wired as Sidecar; config-driven (`command` + `args`/`resume_args`/`inject_args` + `log_file` in `temper.yaml`, `{prompt}`/`{session}`/`{model}`/`{workspace}` templates) with capability negotiation, session bind/resume, handoff, and `--session` support. No live-session discovery; see `examples/temper.yaml`. |
 | Goose | P0 | Wired as Sidecar (`goose run --interactive` launch, session export poll, TUI inject / Ctrl-C interrupt, `goose run --resume` fallback); recent-session attach. Live-owner inject conflicts classify as `live_owner`. |
 | Aider | P1 | Community/first-party adapter candidate |
 

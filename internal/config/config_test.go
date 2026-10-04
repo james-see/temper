@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultsJudgeModel(t *testing.T) {
@@ -51,6 +53,16 @@ func TestMergeLaterWins(t *testing.T) {
 	}
 	if loaded.Sources["temper.budget.max_cost_per_task"] != "temper.yaml" {
 		t.Fatalf("source %q", loaded.Sources["temper.budget.max_cost_per_task"])
+	}
+}
+
+func TestWorkspaceBranchFields(t *testing.T) {
+	var c Config
+	if err := yaml.Unmarshal([]byte("root: /tmp/w\nbranch_prefix: task/\nbase_branch: develop\n"), &c.Workspace); err != nil {
+		t.Fatal(err)
+	}
+	if c.Workspace.BranchPrefix != "task/" || c.Workspace.BaseBranch != "develop" || c.Workspace.Root != "/tmp/w" {
+		t.Fatalf("%+v", c.Workspace)
 	}
 }
 

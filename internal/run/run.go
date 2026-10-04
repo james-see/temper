@@ -96,6 +96,8 @@ func (h *Hub) set(fn func(*Snapshot)) {
 type Options struct {
 	Goal            string
 	Root            string
+	Branch          string
+	BaseBranch      string
 	Agent           string
 	Provider        string
 	Model           string
@@ -209,13 +211,13 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 			dec.Selected.Agent = opts.AttachTargets[0].Agent
 		}
 	}
-	external := agent.IsExternal(dec.Selected.Agent) || len(opts.AttachTargets) > 0
+	external := agent.IsExternalCfg(dec.Selected.Agent, m.Cfg) || len(opts.AttachTargets) > 0
 	if external {
-		if len(opts.AttachTargets) == 0 && !agent.Implemented(dec.Selected.Agent) {
+		if len(opts.AttachTargets) == 0 && !agent.ImplementedCfg(dec.Selected.Agent, m.Cfg) {
 			return store.Run{}, agent.UnimplementedError(dec.Selected.Agent)
 		}
 		ws.Attach()
-	} else if err := ws.Prepare(id); err != nil {
+	} else if err := m.prepareWorkspace(ws, id, opts); err != nil {
 		return store.Run{}, err
 	}
 	tried := map[string]bool{}
@@ -673,6 +675,37 @@ func (m *Manager) Load(ctx context.Context, id string) (store.Run, []event.Event
 	}
 	evs, err := m.Store.ListEvents(ctx, id)
 	return r, evs, err
+}
+
+// prepareWorkspace isolates the run worktree on the task branch. Branch
+// strategy: explicit opts.Branch wins, else Prefix+runID. Base resolution:
+// explicit opts.BaseBranch, else configured workspace.base_branch, else the
+// auto-resolved remote default (see workspace.ResolveBase).
+func (m *Manager) prepareWorkspace(ws *workspace.Manager, id string, opts Options) error {
+	ws.Prefix = m.Cfg.Workspace.BranchPrefix
+	base := opts.BaseBranch
+	if strings.TrimSpace(base) == "" {
+		base = m.Cfg.Workspace.BaseBranch
+	}
+	return ws.PrepareBranch(id, opts.Branch, base)
+}
+
+// RecordEvent appends one event to an existing run's stream. CLI lifecycle
+// commands (pr, archive, workspace) use it; the drive loop uses emit.
+func (m *Manager) RecordEvent(ctx context.Context, runID, typ, actor string, data any) error {
+	seq, err := m.Store.NextSequence(ctx, runID)
+	if err != nil {
+		return err
+	}
+	return m.Store.AppendEvent(ctx, event.Event{
+		ID:        fmt.Sprintf("%s-%d", runID, seq),
+		RunID:     runID,
+		Sequence:  seq,
+		Type:      typ,
+		Timestamp: time.Now().UTC(),
+		Actor:     actor,
+		Data:      store.Encode(data),
+	})
 }
 
 func (m *Manager) Hydrate(r store.Run, evs []event.Event) {

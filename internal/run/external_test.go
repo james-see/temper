@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/james-see/temper/internal/agent"
+	"github.com/james-see/temper/internal/arbiter"
 	"github.com/james-see/temper/internal/config"
 	"github.com/james-see/temper/internal/event"
 	"github.com/james-see/temper/internal/term"
@@ -424,32 +425,74 @@ func TestSidecarDiscoveryNoop(t *testing.T) {
 	}
 }
 
+func TestOpenSidecarExec(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Agents = map[string]config.Agent{
+		"aider": {Type: "exec", Command: "aider", Args: []string{"{prompt}"}},
+	}
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	side, attach, err := mgr.openSidecar(Options{SkipSpawn: true}, arbiter.Decision{
+		Selected: arbiter.Candidate{Agent: "aider"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex, ok := side.(*agent.Exec)
+	if !ok {
+		t.Fatalf("type %T", side)
+	}
+	if ex.ID() != "aider" || attach != "session+logs" {
+		t.Fatalf("%s %s", ex.ID(), attach)
+	}
+	if _, _, err := mgr.openSidecar(Options{}, arbiter.Decision{
+		Selected: arbiter.Candidate{Agent: "ghost"},
+	}); err == nil {
+		t.Fatal("unknown agent must stay unimplemented")
+	}
+}
+
 func TestResolveCursorTargets(t *testing.T) {
-	got, err := resolveCursorTargets(Options{CursorTargets: []agent.CursorPick{{SessionID: "a", Workspace: "/t"}}})
+	cfg := config.Defaults()
+	got, err := resolveCursorTargets(Options{CursorTargets: []agent.CursorPick{{SessionID: "a", Workspace: "/t"}}}, cfg)
 	if err != nil || len(got) != 1 || got[0].SessionID != "a" {
 		t.Fatalf("%+v %v", got, err)
 	}
-	got, err = resolveCursorTargets(Options{CursorSession: "abc", CursorWorkspace: "/y"})
+	got, err = resolveCursorTargets(Options{CursorSession: "abc", CursorWorkspace: "/y"}, cfg)
 	if err != nil || len(got) != 1 || got[0].Workspace != "/y" {
 		t.Fatalf("%+v %v", got, err)
 	}
-	got, err = resolveCursorTargets(Options{})
+	got, err = resolveCursorTargets(Options{}, cfg)
 	if err != nil || got != nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
 
+func TestResolveCursorTargetsSkipsExec(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Agents = map[string]config.Agent{"aider": {Type: "exec", Command: "aider"}}
+	got, err := resolveCursorTargets(Options{Agent: "aider", CursorSession: "ses-9"}, cfg)
+	if err != nil || got != nil {
+		t.Fatalf("exec sessions must not probe cursor: %+v %v", got, err)
+	}
+}
+
 func TestResolveAttachTargetsHermesSession(t *testing.T) {
+	cfg := config.Defaults()
 	got, err := resolveAttachTargets(Options{
 		Agent: "hermes", CursorSession: "20260908_120000_bbbbbb", CursorWorkspace: "/ws",
-	}, "hermes")
+	}, "hermes", cfg)
 	if err != nil || len(got) != 1 || got[0].Agent != "hermes" || got[0].SessionID != "20260908_120000_bbbbbb" {
 		t.Fatalf("%+v %v", got, err)
 	}
 	direct, err := resolveAttachTargets(Options{AttachTargets: []agent.SessionPick{
 		{Agent: "opencode", SessionID: "ses_1"},
 		{Agent: "hermes", SessionID: "h1"},
-	}}, "")
+	}}, "", cfg)
 	if err != nil || len(direct) != 2 {
 		t.Fatalf("%+v %v", direct, err)
 	}

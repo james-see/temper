@@ -45,3 +45,27 @@ func TestResolveKnownAndConfigured(t *testing.T) {
 		t.Fatal("unknown")
 	}
 }
+
+func TestConfiguredExecFlags(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Agents = map[string]config.Agent{
+		"aider": {Type: "exec", Command: "aider"},
+		"mine":  {Type: "hermes"},
+	}
+	spec, ok := ExecSpec("aider", cfg)
+	if !ok || spec.Command != "aider" {
+		t.Fatalf("%+v %v", spec, ok)
+	}
+	if !IsExec("aider", cfg) || IsExec("mine", cfg) || IsExec("ghost", cfg) {
+		t.Fatal("exec flags")
+	}
+	if !ImplementedCfg("aider", cfg) || !IsExternalCfg("aider", cfg) {
+		t.Fatal("exec cfg helpers")
+	}
+	if !ImplementedCfg("hermes", cfg) || !IsExternalCfg("codex", cfg) {
+		t.Fatal("cfg helpers must keep first-class agents")
+	}
+	if ImplementedCfg("ghost", cfg) || IsExternalCfg("ghost", cfg) {
+		t.Fatal("unknown ids stay unimplemented")
+	}
+}
