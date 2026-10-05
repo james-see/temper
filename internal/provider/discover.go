@@ -64,7 +64,10 @@ func (s Status) BestCandidate() (Candidate, bool) {
 	return s.ByID(s.Best)
 }
 
-func preferredOrder(cfg config.Config, st Status) []string {
+// PreferredOrder ranks provider ids: the configured default first, then
+// local runtimes when local-first is set, then cloud providers, then any
+// remaining discovered ids.
+func PreferredOrder(cfg config.Config, st Status) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(id string) {
@@ -174,7 +177,7 @@ func Discover(ctx context.Context, cfg config.Config) Status {
 	cands = append(cands, envProvider(cfg, "openrouter", "openrouter", "OPENROUTER_API_KEY"))
 
 	st := Status{Candidates: cands}
-	rank := preferredOrder(cfg, st)
+	rank := PreferredOrder(cfg, st)
 	for _, id := range rank {
 		if c, ok := st.ByID(id); ok && c.Usable {
 			st.Best = c.ID
@@ -432,7 +435,7 @@ func Instant(cfg config.Config, id string) (Provider, error) {
 
 func NextUsable(cfg config.Config, tried map[string]bool) (Candidate, bool) {
 	st := Discover(context.Background(), cfg)
-	order := preferredOrder(cfg, st)
+	order := PreferredOrder(cfg, st)
 	for _, id := range order {
 		if tried[id] {
 			continue

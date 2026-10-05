@@ -47,6 +47,7 @@ const (
 	RecoveryStarted    = "recovery.started"
 	RecoveryCompleted  = "recovery.completed"
 	RecoveryFailed     = "recovery.failed"
+	RecoveryDeferred   = "recovery.deferred"
 
 	BranchPublished = "branch.published"
 	PRCreated       = "pr.created"

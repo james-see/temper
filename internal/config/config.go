@@ -72,11 +72,23 @@ type AgentCapabilities struct {
 
 type Arbiter struct {
 	Policies []Policy `yaml:"policies"`
+	// Escalation orders provider ids for stall-triggered fallback. Empty
+	// means the default discovery order (honoring local-first).
+	Escalation []string `yaml:"escalation,omitempty"`
 }
 
 type Policy struct {
 	Match  map[string]string `yaml:"match"`
 	Prefer PolicyPrefer      `yaml:"prefer"`
+	// Allow/Deny are hard routing constraints over provider ids and agent
+	// names. Deny wins over allow; both win over preferences and explicit
+	// CLI selections. An empty allow list means "all except denied".
+	// Match is reserved for future conditional policies and currently
+	// ignored: allow/deny apply globally.
+	AllowProviders []string `yaml:"allow_providers,omitempty"`
+	DenyProviders  []string `yaml:"deny_providers,omitempty"`
+	AllowAgents    []string `yaml:"allow_agents,omitempty"`
+	DenyAgents     []string `yaml:"deny_agents,omitempty"`
 }
 
 type PolicyPrefer struct {
@@ -88,6 +100,9 @@ type PolicyPrefer struct {
 const (
 	ReflexHuman = "human"
 	ReflexAuto  = "auto"
+	// ReflexOff disables recovery interventions. Detection still runs and
+	// emits events, but the ladder never fires.
+	ReflexOff = "off"
 
 	// DefaultJudgeModel is an Ollama-pullable tag for Liquid LFM2.5 2.6B Q4_K_M.
 	DefaultJudgeModel = "oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU"
@@ -98,23 +113,35 @@ type Reflex struct {
 	Detectors ReflexDetectors `yaml:"detectors"`
 	Recovery  []RecoveryStep  `yaml:"recovery"`
 	Judge     Judge           `yaml:"judge"`
+	// RecoveryMaxAttempts bounds total ladder interventions per run.
+	RecoveryMaxAttempts int `yaml:"recovery_max_attempts"`
+	// RecoveryBackoffSeconds spaces consecutive interventions with
+	// exponential backoff (1x, 2x, 4x...). Zero disables backoff.
+	RecoveryBackoffSeconds int `yaml:"recovery_backoff_seconds"`
 }
 
 func (r Reflex) EffectiveMode() string {
 	switch strings.ToLower(strings.TrimSpace(r.Mode)) {
 	case ReflexHuman:
 		return ReflexHuman
+	case ReflexOff:
+		return ReflexOff
 	default:
 		return ReflexAuto
 	}
 }
 
 type ReflexDetectors struct {
-	RepeatedError DetectorThresh  `yaml:"repeated_error"`
-	ActionCycle   DetectorRep     `yaml:"action_cycle"`
-	Stagnation    DetectorActions `yaml:"stagnation"`
-	TokenBurn     DetectorThresh  `yaml:"token_burn"`
-	Regression    DetectorFlag    `yaml:"regression"`
+	RepeatedError   DetectorThresh  `yaml:"repeated_error"`
+	ActionCycle     DetectorRep     `yaml:"action_cycle"`
+	Stagnation      DetectorActions `yaml:"stagnation"`
+	TokenBurn       DetectorThresh  `yaml:"token_burn"`
+	Regression      DetectorFlag    `yaml:"regression"`
+	RepoStagnation  DetectorActions `yaml:"repo_stagnation"`
+	TestStagnation  DetectorThresh  `yaml:"test_stagnation"`
+	CostBurn        DetectorCost    `yaml:"cost_burn"`
+	PlanWithoutExec DetectorActions `yaml:"plan_without_exec"`
+	EditOscillation DetectorFlag    `yaml:"edit_oscillation"`
 }
 
 type DetectorThresh struct {
@@ -133,9 +160,17 @@ type DetectorFlag struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// DetectorCost fires once cumulative session spend reaches USD.
+// Zero disables the detector.
+type DetectorCost struct {
+	USD float64 `yaml:"usd"`
+}
+
 type RecoveryStep struct {
 	After  string `yaml:"after"`
 	Action string `yaml:"action"`
+	// MaxAttempts caps how often this action fires per run. Zero means one.
+	MaxAttempts int `yaml:"max_attempts,omitempty"`
 }
 
 type Judge struct {
@@ -220,19 +255,28 @@ func Defaults() Config {
 		Reflex: Reflex{
 			Mode: ReflexAuto,
 			Detectors: ReflexDetectors{
-				RepeatedError: DetectorThresh{Threshold: 3},
-				ActionCycle:   DetectorRep{Repetitions: 2},
-				Stagnation:    DetectorActions{Actions: 6},
-				TokenBurn:     DetectorThresh{Threshold: 20000},
-				Regression:    DetectorFlag{Enabled: true},
+				RepeatedError:   DetectorThresh{Threshold: 3},
+				ActionCycle:     DetectorRep{Repetitions: 2},
+				Stagnation:      DetectorActions{Actions: 6},
+				TokenBurn:       DetectorThresh{Threshold: 20000},
+				Regression:      DetectorFlag{Enabled: true},
+				RepoStagnation:  DetectorActions{Actions: 4},
+				TestStagnation:  DetectorThresh{Threshold: 3},
+				CostBurn:        DetectorCost{},
+				PlanWithoutExec: DetectorActions{Actions: 3},
+				EditOscillation: DetectorFlag{Enabled: true},
 			},
 			Recovery: []RecoveryStep{
 				{After: "first_stall", Action: "replan"},
 				{After: "second_stall", Action: "critic"},
 				{After: "third_stall", Action: "switch_model"},
 				{After: "fourth_stall", Action: "switch_agent"},
+				{After: "fifth_stall", Action: "rollback"},
+				{After: "sixth_stall", Action: "fork"},
 				{After: "exhausted", Action: "human"},
 			},
+			RecoveryMaxAttempts:    10,
+			RecoveryBackoffSeconds: 0,
 			Judge: Judge{
 				Enabled:  boolPtr(true),
 				Model:    DefaultJudgeModel,

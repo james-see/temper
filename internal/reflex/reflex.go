@@ -20,4 +20,13 @@ type Assessment struct {
 	// loop is not attributable to a single action family. Recovery prompts use
 	// it to emit MCP-specific guidance instead of a generic replan nudge.
 	Family string `json:"family,omitempty"`
+	// Evidence is the firing detector's trail: what was observed and why it
+	// counts. Score is the confidence; Evidence is the justification.
+	Evidence []Evidence `json:"evidence,omitempty"`
+}
+
+// Evidence records one detector observation behind an assessment.
+type Evidence struct {
+	Detector string `json:"detector"`
+	Detail   string `json:"detail,omitempty"`
 }

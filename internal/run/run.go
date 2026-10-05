@@ -2,6 +2,8 @@ package run
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -67,6 +69,7 @@ type Snapshot struct {
 	ReflexMode       string
 	PendingRecovery  string
 	PendingReasons   []string
+	RoutingReasons   []string
 	SessionID        string
 	Attach           string
 	Sessions         []BoundSession
@@ -147,8 +150,15 @@ type session struct {
 	approve     chan struct{}
 	mode        string
 	thinkChars  int
-	prompts     []string // user prompts queued while sidecar is busy
-	toolOpen    int      // outstanding tool.requested without completed
+	// lastCheckpoint is the newest workspace checkpoint hash, the target
+	// for rollback/fork recovery. Empty when nothing is checkpointed yet.
+	lastCheckpoint string
+	// ledger accumulates per-provider cost/latency accounting.
+	ledger *arbiter.Ledger
+	// forkAttempts counts fork recoveries this run, naming attempt branches.
+	forkAttempts int
+	prompts      []string // user prompts queued while sidecar is busy
+	toolOpen     int      // outstanding tool.requested without completed
 }
 
 type Manager struct {
@@ -205,7 +215,8 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	if err != nil {
 		return store.Run{}, err
 	}
-	dec := arbiter.Select(m.Cfg, opts.Agent, opts.Provider, opts.Model)
+	discovered := provider.Discover(ctx, m.Cfg)
+	dec := arbiter.SelectWithStatus(m.Cfg, opts.Agent, opts.Provider, opts.Model, discovered)
 	if len(opts.AttachTargets) > 0 {
 		if dec.Selected.Agent == "" || dec.Selected.Agent == "native" {
 			dec.Selected.Agent = opts.AttachTargets[0].Agent
@@ -242,9 +253,10 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 			RunID: id, Goal: opts.Goal, ActiveGoal: opts.Goal, State: StateCreated,
 			Agent: m.rec.Agent, Provider: m.rec.Provider, Model: m.rec.Model,
 			Workspace: m.rec.Workspace, Started: time.Now(),
-			BudgetMax:  m.Cfg.Temper.Budget.MaxCostPerTask,
-			JudgeOn:    m.Cfg.Reflex.Judge.EffectiveEnabled(),
-			ReflexMode: m.Cfg.Reflex.EffectiveMode(),
+			BudgetMax:      m.Cfg.Temper.Budget.MaxCostPerTask,
+			JudgeOn:        m.Cfg.Reflex.Judge.EffectiveEnabled(),
+			ReflexMode:     m.Cfg.Reflex.EffectiveMode(),
+			RoutingReasons: dec.Reasons,
 		}
 	})
 
@@ -269,7 +281,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 	if prov == nil {
 		var err error
 		if m.rec.Provider == "" {
-			if c, ok := provider.NextUsable(m.Cfg, tried); ok {
+			if c, reasons, ok := arbiter.NextInChain(m.Cfg, tried, discovered); ok {
 				m.rec.Provider = c.ID
 				if m.rec.Model == "" {
 					m.rec.Model = provider.DefaultModel(m.Cfg, c.ID)
@@ -277,7 +289,12 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 				tried[c.ID] = true
 				dec.Selected.Provider = c.ID
 				dec.Selected.Model = m.rec.Model
-				m.Hub.set(func(s *Snapshot) { s.Provider = c.ID; s.Model = m.rec.Model })
+				dec.Reasons = append(dec.Reasons, reasons...)
+				m.Hub.set(func(s *Snapshot) {
+					s.Provider = c.ID
+					s.Model = m.rec.Model
+					s.RoutingReasons = dec.Reasons
+				})
 			}
 		}
 		prov, _, err = provider.Resolve(m.Cfg, m.rec.Provider)
@@ -315,8 +332,10 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		m.Cfg.Reflex.Detectors.Stagnation.Actions,
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
+	eng.ApplyTuning(reflexTuning(m.Cfg))
 	actions := recoveryActions(m.Cfg)
 	ladder := reflex.NewLadder(actions)
+	ladder.ApplyConfig(ladderConfig(m.Cfg))
 	eval := &evaluator.Engine{
 		Workdir: ws.Root(),
 		Test:    m.Cfg.Evaluator.Test,
@@ -331,6 +350,7 @@ func (m *Manager) Execute(ctx context.Context, opts Options) (store.Run, error) 
 		eng: eng, ladder: ladder, eval: eval,
 		approve: make(chan struct{}, 1),
 		mode:    m.Cfg.Reflex.EffectiveMode(),
+		ledger:  &arbiter.Ledger{},
 	}
 	return m.drive(ctx)
 }
@@ -358,6 +378,7 @@ func (m *Manager) Followup(ctx context.Context, text string) (store.Run, error) 
 		m.Cfg.Reflex.Detectors.Stagnation.Actions,
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
+	m.sess.eng.ApplyTuning(reflexTuning(m.Cfg))
 	m.adoptUserGoal(ctx, text, kind)
 	m.Hub.set(func(s *Snapshot) {
 		s.Done = false
@@ -391,6 +412,7 @@ func (m *Manager) adoptUserGoal(ctx context.Context, text, kind string) bool {
 	} else {
 		m.sess.ladder = reflex.NewLadder(recoveryActions(m.Cfg))
 	}
+	m.sess.ladder.ApplyConfig(ladderConfig(m.Cfg))
 	m.Hub.set(func(s *Snapshot) {
 		if s.Goal == "" {
 			s.Goal = text
@@ -442,12 +464,21 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 
 		emit(event.ModelCalled, "native", map[string]any{"model": m.rec.Model, "provider": m.rec.Provider})
 		m.debug("model.generate", "step", step, "model", m.rec.Model, "provider", m.rec.Provider)
+		stepStart := time.Now()
 		res := native.Step(ctx)
+		stepLatency := time.Since(stepStart)
 		promptTok += res.Usage.PromptTokens
 		complTok += res.Usage.CompletionTokens
 		phasePrompt += res.Usage.PromptTokens
 		phaseCompl += res.Usage.CompletionTokens
 		workerTok = promptTok + complTok
+		if s.ledger != nil {
+			provID := m.rec.Provider
+			if provID == "" && s.opts.Prov != nil {
+				provID = s.opts.Prov.ID()
+			}
+			s.ledger.Observe(provID, res.Usage.PromptTokens, res.Usage.CompletionTokens, stepLatency, res.Err)
+		}
 		m.Hub.set(func(s *Snapshot) {
 			s.TokensWorker = workerTok
 			s.TokensPrompt = promptTok
@@ -524,9 +555,11 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 
 		diff, _ := ws.Status()
 		meaningful := strings.TrimSpace(diff) != ""
+		stepHash := ""
 		if meaningful {
 			stagnation = 0
 			if hash, err := ws.Checkpoint(fmt.Sprintf("temper %s step %d", m.rec.ID, step)); err == nil && hash != "" {
+				stepHash = hash
 				emit(event.CheckpointCreated, "workspace", map[string]any{"hash": hash})
 			}
 		} else if exploratory {
@@ -538,6 +571,29 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 		if len(evals) > 0 {
 			p := evaluator.AllPassed(evals)
 			passed = &p
+		}
+		repoHash := ""
+		if strings.TrimSpace(diff) != "" {
+			// Hash status plus content: bare filenames repeat whenever
+			// one file is iterated on, which is work, not stagnation.
+			content, _ := ws.Diff()
+			repoHash = reflex.Fingerprint(diff + "\n" + content)
+		}
+		evalFP := ""
+		if len(evals) > 0 {
+			var b strings.Builder
+			for _, ev := range evals {
+				fmt.Fprintf(&b, "%s|%t|%s;", ev.Kind, ev.Passed, ev.Output)
+			}
+			evalFP = reflex.Fingerprint(b.String())
+		}
+		var writes []reflex.FileWrite
+		for _, out := range res.ToolOut {
+			for _, f := range out.Files {
+				if h, ok := hashWorkspaceFile(ws.Root(), f); ok {
+					writes = append(writes, reflex.FileWrite{Path: f, Hash: h})
+				}
+			}
 		}
 		assess := eng.Assess(reflex.Signals{
 			Actions:          actionNorms,
@@ -552,6 +608,12 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 			Exploratory:      exploratory,
 			StagnationN:      stagnation,
 			Step:             step,
+			ThinkOnly:        len(res.ToolCalls) == 0,
+			ThinkChars:       len(res.Content),
+			RepoHash:         repoHash,
+			EvalFingerprint:  evalFP,
+			CostUSD:          costOf(workerTok, judgeTok),
+			Writes:           writes,
 		})
 		if passed != nil {
 			prevPass = passed
@@ -582,6 +644,13 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 		switch assess.State {
 		case reflex.Complete:
 			return m.complete(ctx)
+		case reflex.Progressing:
+			ladder.NoteProgress()
+			// Only progressing steps with no failing evaluation promote
+			// the rollback target.
+			if stepHash != "" && (passed == nil || *passed) {
+				s.lastCheckpoint = stepHash
+			}
 		case reflex.Uncertain:
 			// Uncertain is not failure. Keep going, or accept a final answer
 			// when the model stopped and no evaluator is configured.
@@ -596,6 +665,18 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 			}
 			if assess.State == reflex.Regressing {
 				emit(event.RegressionDetected, "reflex", assess)
+			}
+			// Off mode observes but never intervenes.
+			if m.mode() == config.ReflexOff {
+				m.debug("reflex.off", "step", step, "state", assess.State)
+				break
+			}
+			if d := ladder.Cooldown(); d > 0 {
+				emit(event.RecoveryDeferred, "reflex", map[string]any{
+					"cooldown_ms": d.Milliseconds(), "state": string(assess.State),
+				})
+				m.debug("reflex.deferred", "step", step, "cooldown_ms", d.Milliseconds())
+				break
 			}
 			action, ok := ladder.NextFor(assess)
 			if !ok {
@@ -632,7 +713,8 @@ func (m *Manager) drive(ctx context.Context) (store.Run, error) {
 }
 
 func (m *Manager) fallbackProvider(ctx context.Context, tried map[string]bool, emit func(string, string, any)) (provider.Provider, bool) {
-	c, ok := provider.NextUsable(m.Cfg, tried)
+	st := provider.Discover(ctx, m.Cfg)
+	c, reasons, ok := arbiter.NextInChain(m.Cfg, tried, st)
 	if !ok {
 		return nil, false
 	}
@@ -658,12 +740,16 @@ func (m *Manager) fallbackProvider(ctx context.Context, tried map[string]bool, e
 	}
 	m.rec.Provider = c.ID
 	m.rec.Model = model
-	m.Hub.set(func(s *Snapshot) { s.Provider = c.ID; s.Model = model })
+	m.Hub.set(func(s *Snapshot) { s.Provider = c.ID; s.Model = model; s.RoutingReasons = reasons })
 	_ = m.Store.UpdateRun(ctx, m.rec)
-	emit(event.RoutingDecided, "arbiter", map[string]any{
+	data := map[string]any{
 		"selected": map[string]string{"provider": c.ID, "model": model},
-		"reasons":  []string{"fallback after provider error", c.Reason},
-	})
+		"reasons":  append([]string{"fallback after provider error"}, reasons...),
+	}
+	if m.sess != nil && m.sess.ledger != nil {
+		data["accounting"] = m.sess.ledger.Summary()
+	}
+	emit(event.RoutingDecided, "arbiter", data)
 	emit(event.AgentSelected, "arbiter", map[string]any{"provider": c.ID, "model": model})
 	return p, true
 }
@@ -870,6 +956,34 @@ func recoveryActions(cfg config.Config) []string {
 	return filterRecovery(cfg, false, true)
 }
 
+// reflexTuning maps configured detector knobs onto the engine. Config values
+// are fully defaulted by config.Defaults, so ApplyTuning assigns directly.
+func reflexTuning(cfg config.Config) reflex.DetectorTuning {
+	d := cfg.Reflex.Detectors
+	return reflex.DetectorTuning{
+		RepoStagnation:  d.RepoStagnation.Actions,
+		TestStagnation:  d.TestStagnation.Threshold,
+		CostBurnUSD:     d.CostBurn.USD,
+		PlanWithoutExec: d.PlanWithoutExec.Actions,
+		EditOscillation: d.EditOscillation.Enabled,
+	}
+}
+
+// hashWorkspaceFile returns a short content hash for oscillation detection.
+// It reports false for missing, unreadable, or oversized files.
+func hashWorkspaceFile(root, path string) (string, bool) {
+	p := path
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(root, p)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil || len(b) > 1<<20 {
+		return "", false
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8]), true
+}
+
 func sidecarRecovery(cfg config.Config) []string {
 	return filterRecovery(cfg, true, false)
 }
@@ -885,9 +999,36 @@ func filterRecovery(cfg config.Config, sidecar bool, modelOverride bool) []strin
 		if sidecar && s.Action == "switch_model" && !modelOverride {
 			continue
 		}
+		// Rollback and fork need run checkpoints, which only the native
+		// loop records today.
+		if sidecar && (s.Action == "rollback" || s.Action == "fork") {
+			continue
+		}
 		out = append(out, s.Action)
 	}
 	return out
+}
+
+// ladderConfig maps configured attempt limits and backoff onto the ladder.
+func ladderConfig(cfg config.Config) reflex.LadderConfig {
+	caps := map[string]int{}
+	for _, s := range cfg.Reflex.Recovery {
+		n := s.MaxAttempts
+		if n <= 0 {
+			n = 1
+		}
+		if prev, ok := caps[s.Action]; !ok || n > prev {
+			caps[s.Action] = n
+		}
+	}
+	backoffMax := time.Duration(cfg.Reflex.RecoveryBackoffSeconds) * time.Second * 8
+	return reflex.LadderConfig{
+		MaxEach:     1,
+		Caps:        caps,
+		MaxTotal:    cfg.Reflex.RecoveryMaxAttempts,
+		BackoffBase: time.Duration(cfg.Reflex.RecoveryBackoffSeconds) * time.Second,
+		BackoffMax:  backoffMax,
+	}
 }
 
 func recoveryPrompt(action, goal string, a reflex.Assessment) string {
@@ -906,12 +1047,16 @@ func recoveryPrompt(action, goal string, a reflex.Assessment) string {
 		prompt += " Critic mode: diagnose the last failed approach, name what not to repeat, then take one concrete different action."
 	case action == "replan":
 		prompt += " Compact failed attempts into a short plan, then execute the next smallest verifiable step."
+	case action == "rollback":
+		prompt += " The workspace was reset to the last checkpoint. Do not replay the reverted steps."
+	case action == "fork":
+		prompt += " The failed attempt is preserved on its branch and the workspace was reset. Take a different approach, not a variation of the last one."
 	}
 	return prompt
 }
 
 func costOf(worker, judge int) float64 {
-	return float64(worker+judge) * 0.000002
+	return float64(worker+judge) * arbiter.CostPerTokenUSD
 }
 
 func (m *Manager) debug(msg string, args ...any) {
@@ -929,6 +1074,13 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func shortHash(hash string) string {
+	if len(hash) > 7 {
+		return hash[:7]
+	}
+	return hash
 }
 
 func newID() string {

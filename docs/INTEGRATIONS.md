@@ -42,7 +42,8 @@ Agent adapters should expose capability metadata where available:
 | Anthropic | P0 | Native hosted adapter |
 | Gemini | P0 | Native hosted adapter |
 | OpenAI-compatible | P0 | Generic compatibility layer |
-| OpenRouter | P1 | Broad hosted model routing |
+| OpenRouter | P0 | Wired via the generic OpenAI driver (registry type with default URL) |
+| Z.AI GLM | P1 | Planned zero-cost cloud tier; config-ready today via an OpenAI-compatible entry — see `docs/ROUTING.md` and `examples/routing.yaml` |
 | Bedrock | P1 | Enterprise/provider abstraction |
 | Groq | P1 | Low-latency hosted inference |
 | Together | P1 | Hosted open-model inference |

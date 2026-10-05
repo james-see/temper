@@ -72,10 +72,12 @@ func thinkContent(prev []string, current string) (Assessment, bool) {
 		cont++
 	}
 	if cont >= 2 && cont > stop {
-		return Assessment{State: Looping, Score: 0.15, Reasons: []string{"think-loop"}}, true
+		return Assessment{State: Looping, Score: 0.15, Reasons: []string{"think-loop"},
+			Evidence: ev("think-loop", "continuation phrases recur across thinking")}, true
 	}
 	if cont >= 1 && stop == 0 {
-		return Assessment{State: Uncertain, Score: 0.3, Reasons: []string{"think-risk"}}, true
+		return Assessment{State: Uncertain, Score: 0.3, Reasons: []string{"think-risk"},
+			Evidence: ev("think-risk", "continuation phrases without stopping cues")}, true
 	}
 	return Assessment{}, false
 }

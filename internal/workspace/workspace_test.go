@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -126,6 +127,84 @@ func TestResolveBase(t *testing.T) {
 	gitRun(t, t.TempDir(), "git", "clone", remote, clone)
 	if got := ResolveBase(clone, ""); got != "origin/main" {
 		t.Fatalf("origin default %q", got)
+	}
+}
+
+func TestCheckpointSkipsDataDir(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	m, err := New(dir, filepath.Join(dir, ".temper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Attach()
+	// Simulate the live sqlite store inside the data dir.
+	if err := os.MkdirAll(filepath.Join(dir, ".temper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".temper", "temper.db"), []byte("live"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Checkpoint("with db present"); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "ls-tree", "-r", "--name-only", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), ".temper") {
+		t.Fatalf("checkpoint must not commit data dir: %q", out)
+	}
+	// A rollback to the pre-db commit must leave the live file in place.
+	if err := m.Rollback("HEAD~1"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, ".temper", "temper.db"))
+	if err != nil || string(b) != "live" {
+		t.Fatalf("rollback must not delete live store: %q %v", b, err)
+	}
+}
+
+func TestForkAttempt(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	m, err := New(dir, filepath.Join(dir, ".temper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Attach()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("good"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	good, err := m.Checkpoint("good state")
+	if err != nil || good == "" {
+		t.Fatalf("%s %v", good, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := m.ForkAttempt("r1", 1, good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch != "temper/r1/attempt-1" {
+		t.Fatalf("branch %q", branch)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if err != nil || string(b) != "good" {
+		t.Fatalf("worktree must reset to checkpoint: %q %v", b, err)
+	}
+	// The failed attempt survives on its branch.
+	cmd := exec.Command("git", "show", branch+":a.txt")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "bad" {
+		t.Fatalf("attempt branch must preserve bad state: %q %v", out, err)
+	}
+	if _, err := m.ForkAttempt("r1", 2, ""); err == nil {
+		t.Fatal("empty checkpoint must fail")
 	}
 }
 

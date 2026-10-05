@@ -20,6 +20,39 @@ import (
 	"github.com/james-see/temper/internal/workspace"
 )
 
+func TestExecuteSetsRoutingRationaleAndLedger(t *testing.T) {
+	dir := t.TempDir()
+	initGit(t, dir)
+	cfg := config.Defaults()
+	cfg.Workspace.Root = dir
+	cfg.Reflex.Mode = config.ReflexOff
+	cfg.Reflex.Judge.Model = ""
+	mgr, err := Open(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	mock := &provider.Mock{Name: "mock", Handler: func(provider.Request) provider.Result {
+		return provider.Result{
+			ToolCalls: []provider.ToolCall{{ID: "1", Name: "shell", Arguments: `{"command":"echo hi"}`}},
+			Usage:     provider.Usage{PromptTokens: 10, CompletionTokens: 5},
+		}
+	}}
+	_, _ = mgr.Execute(ctx, Options{Goal: "route me", Root: dir, Prov: mock, MaxSteps: 2})
+	if len(mgr.Hub.Get().RoutingReasons) == 0 {
+		t.Fatal("snapshot must carry routing rationale")
+	}
+	if mgr.sess == nil || mgr.sess.ledger == nil {
+		t.Fatal("session must hold a ledger")
+	}
+	tot := mgr.sess.ledger.Totals()
+	if tot.Calls != 2 || tot.PromptTokens != 20 || tot.CompletionTokens != 10 {
+		t.Fatalf("ledger %+v", tot)
+	}
+}
+
 func TestExecuteDetectsLoop(t *testing.T) {
 	dir := t.TempDir()
 	initGit(t, dir)
@@ -500,7 +533,7 @@ func TestEscalateModelSidecarOverride(t *testing.T) {
 	}
 }
 
-func initGit(t *testing.T, dir string) {
+func initGit(t testing.TB, dir string) {
 	t.Helper()
 	run := func(args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)

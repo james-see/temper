@@ -1141,6 +1141,10 @@ func (m Model) statusOverlay() string {
 	if snap.JudgeOn {
 		judge = "on"
 	}
+	routing := strings.Join(snap.RoutingReasons, "; ")
+	if len(routing) > 240 {
+		routing = routing[:240] + "…"
+	}
 	body := fmt.Sprintf(`run        %s
 state      %s
 goal       %s
@@ -1148,6 +1152,7 @@ active     %s
 agent      %s
 provider   %s
 model      %s
+routing    %s
 workspace  %s
 budget     %.4f / %.2f
 tokens     in %d  out %d  judge %d
@@ -1159,7 +1164,7 @@ session    %s
 sessions   %d
 attach     %s
 judge      %s`,
-		snap.RunID, snap.State, snap.Goal, nz(snap.ActiveGoal, snap.Goal), nz(snap.Agent, m.agent), nz(snap.Provider, m.provider), nz(snap.Model, m.model), snap.Workspace,
+		snap.RunID, snap.State, snap.Goal, nz(snap.ActiveGoal, snap.Goal), nz(snap.Agent, m.agent), nz(snap.Provider, m.provider), nz(snap.Model, m.model), nz(routing, "—"), snap.Workspace,
 		snap.BudgetUsed, snap.BudgetMax, snap.TokensPrompt, snap.TokensCompletion, snap.TokensJudge,
 		snap.Reflex.State, strings.Join(snap.Reflex.Reasons, ", "),
 		nz(snap.RecoveryRung, "—"), nz(snap.PendingRecovery, "—"), nz(snap.ReflexMode, "human"),

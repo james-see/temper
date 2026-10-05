@@ -368,6 +368,7 @@ func (m *Manager) switchSidecar(ctx context.Context, to string, emit func(string
 	m.Hub.set(func(s *Snapshot) {
 		s.Agent = to
 		s.Attach = attach
+		s.RoutingReasons = dec.Reasons
 	})
 	emit(event.AgentSwitched, "reflex", map[string]any{
 		"from": from, "to": to, "session": side.SessionID(),

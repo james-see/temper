@@ -27,6 +27,7 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		s.Workspace = ws.Root()
 		s.Attach = "session+logs"
 		s.JudgeOn = m.Cfg.Reflex.Judge.EffectiveEnabled()
+		s.RoutingReasons = dec.Reasons
 	})
 
 	side, attach, err := m.openSidecar(opts, dec)
@@ -83,10 +84,12 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		m.Cfg.Reflex.Detectors.Stagnation.Actions,
 		m.Cfg.Reflex.Detectors.Regression.Enabled,
 	)
+	eng.ApplyTuning(reflexTuning(m.Cfg))
 	ladder := reflex.NewLadder(sidecarRecovery(m.Cfg))
 	if caps, err := side.Capabilities(ctx); err == nil && caps.ModelOverride {
 		ladder = reflex.NewLadder(sidecarRecoveryCaps(m.Cfg, true))
 	}
+	ladder.ApplyConfig(ladderConfig(m.Cfg))
 	for action, n := range opts.LadderAttempts {
 		if n > 0 {
 			ladder.Attempts[action] = n
@@ -101,6 +104,7 @@ func (m *Manager) startExternal(ctx context.Context, opts Options, ws *workspace
 		ladder:  ladder,
 		approve: make(chan struct{}, 1),
 		mode:    m.Cfg.Reflex.EffectiveMode(),
+		ledger:  &arbiter.Ledger{},
 	}
 	m.debug("routing", "agent", m.rec.Agent, "sidecar", true, "spawn", !opts.SkipSpawn, "attach", attach, "continue", opts.Continuing)
 	return m.driveExternal(ctx)
@@ -516,6 +520,13 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		s.stagnation = 0
 		m.Hub.set(func(snap *Snapshot) { snap.Step = s.step })
 
+		repoHash := ""
+		if s.ws != nil {
+			if status, serr := s.ws.Status(); serr == nil && strings.TrimSpace(status) != "" {
+				content, _ := s.ws.Diff()
+				repoHash = reflex.Fingerprint(status + "\n" + content)
+			}
+		}
 		assess := eng.Assess(reflex.Signals{
 			Actions:     actionNorms,
 			Errors:      errFPs,
@@ -527,6 +538,7 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			ThinkChars:  s.thinkChars,
 			ThinkOnly:   thinkOnly,
 			ThinkText:   thinkText,
+			RepoHash:    repoHash,
 		})
 		if len(actionNorms) > 0 || meaningful {
 			s.thinkChars = 0
@@ -558,6 +570,8 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 		})
 
 		switch assess.State {
+		case reflex.Progressing:
+			s.ladder.NoteProgress()
 		case reflex.Looping, reflex.Regressing, reflex.Stalled:
 			if assess.State == reflex.Looping {
 				emit(event.LoopDetected, "reflex", assess)
@@ -569,7 +583,17 @@ func (m *Manager) driveExternal(ctx context.Context) (store.Run, error) {
 			if assess.State == reflex.Regressing {
 				emit(event.RegressionDetected, "reflex", assess)
 			}
+			// Off mode observes but never intervenes.
+			if m.mode() == config.ReflexOff {
+				break
+			}
 			if s.pending == nil {
+				if d := s.ladder.Cooldown(); d > 0 {
+					emit(event.RecoveryDeferred, "reflex", map[string]any{
+						"cooldown_ms": d.Milliseconds(), "state": string(assess.State),
+					})
+					break
+				}
 				action, ok := s.ladder.NextFor(assess)
 				if !ok {
 					return m.fail(ctx, fmt.Errorf("recovery exhausted"))
@@ -813,6 +837,40 @@ func (m *Manager) applyPending(ctx context.Context, emit func(string, string, an
 	}
 	prompt := recoveryPrompt(p.Action, m.sess.opts.Goal, p.Assess)
 	switch p.Action {
+	case "rollback":
+		if m.sess.ws == nil || m.sess.lastCheckpoint == "" {
+			emit(event.RecoveryFailed, "reflex", map[string]any{"action": p.Action, "error": "no checkpoint to roll back to"})
+			p.Held = true
+			_ = m.transition(ctx, StateWaitingHuman)
+			return nil
+		}
+		if err := m.sess.ws.Rollback(m.sess.lastCheckpoint); err != nil {
+			emit(event.RecoveryFailed, "reflex", map[string]any{"action": p.Action, "error": err.Error()})
+			p.Held = true
+			p.LastErr = err.Error()
+			_ = m.transition(ctx, StateWaitingHuman)
+			return nil
+		}
+		prompt += fmt.Sprintf(" Temper rolled the workspace back to checkpoint %s. Retry from that state with a different approach.", shortHash(m.sess.lastCheckpoint))
+		emit(event.CheckpointRestored, "reflex", map[string]any{"action": p.Action, "hash": m.sess.lastCheckpoint})
+	case "fork":
+		if m.sess.ws == nil || m.sess.lastCheckpoint == "" {
+			emit(event.RecoveryFailed, "reflex", map[string]any{"action": p.Action, "error": "no checkpoint to fork from"})
+			p.Held = true
+			_ = m.transition(ctx, StateWaitingHuman)
+			return nil
+		}
+		branch, ferr := m.sess.ws.ForkAttempt(m.rec.ID, m.sess.forkAttempts+1, m.sess.lastCheckpoint)
+		if ferr != nil {
+			emit(event.RecoveryFailed, "reflex", map[string]any{"action": p.Action, "error": ferr.Error()})
+			p.Held = true
+			p.LastErr = ferr.Error()
+			_ = m.transition(ctx, StateWaitingHuman)
+			return nil
+		}
+		m.sess.forkAttempts++
+		prompt += fmt.Sprintf(" Temper preserved this attempt on branch %s and reset to checkpoint %s. Try a fundamentally different approach.", branch, shortHash(m.sess.lastCheckpoint))
+		emit(event.CheckpointRestored, "reflex", map[string]any{"action": p.Action, "hash": m.sess.lastCheckpoint, "branch": branch})
 	case "switch_model":
 		fromProv, fromModel := m.rec.Provider, m.rec.Model
 		switched, toProv, toModel := m.escalateModel(ctx, emit)
@@ -910,7 +968,10 @@ func (m *Manager) escalateModel(ctx context.Context, emit func(string, string, a
 					m.sess.native.SetModel(name)
 					m.rec.Model = name
 					m.sess.opts.Model = name
-					m.Hub.set(func(s *Snapshot) { s.Model = name })
+					m.Hub.set(func(s *Snapshot) {
+						s.Model = name
+						s.RoutingReasons = []string{"switch_model same-provider alternate"}
+					})
 					_ = m.Store.UpdateRun(ctx, m.rec)
 					emit(event.RoutingDecided, "arbiter", map[string]any{
 						"selected": map[string]string{"provider": curProv, "model": name},
@@ -941,7 +1002,10 @@ func (m *Manager) escalateModel(ctx context.Context, emit func(string, string, a
 			if alt != "" && alt != curModel {
 				m.rec.Model = alt
 				m.sess.opts.Model = alt
-				m.Hub.set(func(s *Snapshot) { s.Model = alt })
+				m.Hub.set(func(s *Snapshot) {
+					s.Model = alt
+					s.RoutingReasons = []string{"switch_model sidecar ModelOverride"}
+				})
 				_ = m.Store.UpdateRun(ctx, m.rec)
 				emit(event.RoutingDecided, "arbiter", map[string]any{
 					"selected": map[string]string{"agent": m.sess.sidecar.ID(), "model": alt},

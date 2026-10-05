@@ -56,3 +56,20 @@ func TestLadderNextForRuminationUsesSwitchModel(t *testing.T) {
 		t.Fatalf("%s %v", step, ok)
 	}
 }
+
+func TestPreferRecoveryNewReasons(t *testing.T) {
+	cases := []struct{ reason, first string }{
+		{"edit-oscillation", "rollback"},
+		{"test-stagnation", "critic"},
+		{"repo-stagnation", "replan"},
+		{"plan-without-exec", "replan"},
+		{"cost-burn", "switch_model"},
+		{"evaluator-regression", "critic"},
+	}
+	for _, tc := range cases {
+		got := PreferRecovery(Assessment{State: Stalled, Reasons: []string{tc.reason}})
+		if len(got) == 0 || got[0] != tc.first {
+			t.Fatalf("%s: %v", tc.reason, got)
+		}
+	}
+}

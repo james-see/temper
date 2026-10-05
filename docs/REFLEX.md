@@ -53,16 +53,21 @@ A sequence such as `edit → test → revert` repeats.
 Same normalized compiler/test/runtime error recurs despite attempted fixes.
 
 ### Repository stagnation
-No meaningful git-tree or evaluator delta after N costly actions.
+No meaningful git-tree or evaluator delta after N costly actions. Wired: identical repo-state hash across `repo_stagnation.actions` assessments (default 4) reports `repo-stagnation`.
 
 ### Regression
-A previously achieved evaluator state gets worse.
+A previously achieved evaluator state gets worse. Wired: evaluator pass→fail flips (`evaluator-regression`) and A-B-A file content reverts (`edit-oscillation`, on by default).
 
 ### Token burn
-Spend/tokens exceed a configured ratio to progress.
+Spend/tokens exceed a configured ratio to progress. Wired: completion-token burn (`token_burn.threshold`, default 20000) and, when `cost_burn.usd` is set, cumulative spend.
+
+### Test stagnation
+The same failing evaluator output repeats `test_stagnation.threshold` times (default 3) without changing.
 
 ### Planning loop
-Plans or strategy summaries recur while no external action happens.
+Plans or strategy summaries recur while no external action happens. Wired: `plan_without_exec.actions` (default 3) consecutive think-only assessments with substantial thinking report `plan-without-exec`; rumination keeps longer thinking.
+
+Every firing detector attaches an evidence trail (`Assessment.Evidence`: detector + detail) alongside its confidence score.
 
 ### Semantic stagnation
 Different surface actions produce essentially the same state. Initially use state fingerprints; later optional model-assisted classification.
@@ -98,8 +103,11 @@ Default order:
 3. Invoke critic/debugger
 4. Switch model (native: real provider/model change; sidecars with `ModelOverride`: record + inject)
 5. Switch agent
-6. Roll back and fork alternate approach
-7. Human escalation
+6. Roll back to the last progressing checkpoint (`rollback`)
+7. Fork: preserve the attempt on a branch, reset, try a new approach (`fork`)
+8. Human escalation
+
+Limits: per-action caps (`max_attempts`, default 1), a run total (`recovery_max_attempts`, default 10), and optional exponential backoff (`recovery_backoff_seconds`, default off) with `recovery.deferred` events while cooling down. Mode `off` keeps detection but never intervenes. Rollback/fork need run checkpoints, so they are native-only today.
 
 Temper also **conditions the next rung on the detector family/reason** (`PreferRecovery` / `Ladder.NextFor`):
 

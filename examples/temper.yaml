@@ -70,12 +70,24 @@ agents:
   #     resume: true
 
 arbiter:
+  # Stall-triggered escalation order (VAL-2611). First untried, usable,
+  # policy-allowed provider wins; remaining ids follow default discovery
+  # order. Empty means default order only.
+  escalation: [ollama, anthropic, openai]
+
   policies:
     - match:
         complexity: low
       prefer:
         agent: opencode
         provider: ollama
+      # Hard constraints (VAL-2611): deny wins over allow, and both win
+      # over preferences and explicit CLI selections. Empty allow = all
+      # except denied. Match is reserved; allow/deny apply globally.
+      # allow_providers: [ollama, openai]
+      # deny_providers: [gemini]
+      # allow_agents: [native]
+      # deny_agents: [cursor]
 
     - match:
         language: go
@@ -111,6 +123,21 @@ reflex:
     regression:
       enabled: true
 
+    repo_stagnation:
+      actions: 4   # identical repo state across N assessments
+
+    test_stagnation:
+      threshold: 3   # consecutive failures with identical output
+
+    cost_burn:
+      usd: 0   # 0 disables; e.g. 0.50 stalls past fifty cents
+
+    plan_without_exec:
+      actions: 3   # think-only assessments before stalling
+
+    edit_oscillation:
+      enabled: true   # A-B-A file revert detection
+
   recovery:
     - after: first_stall
       action: replan
@@ -120,8 +147,15 @@ reflex:
       action: switch_model
     - after: fourth_stall
       action: switch_agent
+    - after: fifth_stall
+      action: rollback
+    - after: sixth_stall
+      action: fork
     - after: exhausted
       action: human
+
+  recovery_max_attempts: 10   # total ladder interventions per run
+  recovery_backoff_seconds: 0   # 0 disables; N spaces retries 1x, 2x, 4x...
 
   # Local critic. Default on. Invoked when heuristics return Uncertain.
   # Default weights: Liquid LFM2.5 2.6B Q4_K_M via Ollama (~1.67GB).

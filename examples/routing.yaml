@@ -1,0 +1,56 @@
+# Multi-backend routing example (VAL-2649): Z.AI GLM, Ollama, oMLX, OpenAI,
+# Anthropic. Strategy: local runtimes first (privacy, zero cost), then the
+# Z.AI free tier (glm-4.7-flash, $0 in/out), then paid cloud escalation.
+# See docs/ROUTING.md. Load with: temper --config examples/routing.yaml
+
+temper:
+  budget:
+    max_cost_per_task: 5.00
+  preference:
+    local_first: true
+    default_provider: ollama
+
+providers:
+  # Local Ollama daemon. First pick under local_first.
+  ollama:
+    type: ollama
+    url: http://localhost:11434
+
+  # oMLX: Apple-silicon local runtime over an OpenAI-compatible API.
+  local-mlx:
+    type: omlx
+    url: http://localhost:8000
+
+  # Z.AI GLM over its OpenAI-compatible endpoint. No bespoke adapter:
+  # type openai + URL reuses the OpenAI client verbatim. Model is explicit
+  # per run (e.g. glm-4.7-flash for the $0 tier, glm-4.7 / glm-5.3 to scale
+  # up); per-id default_model is proposed in docs/ROUTING.md.
+  zai:
+    type: openai
+    url: https://api.z.ai/api/paas/v4
+    # api_key:  # or env ZAI_API_KEY (mapping proposed, see docs/ROUTING.md)
+
+  # Z.AI GLM Coding Plan subscription endpoint. Same shape, plan billing.
+  zai-coding:
+    type: openai
+    url: https://api.z.ai/api/coding/paas/v4
+    # api_key:  # or env ZAI_API_KEY
+
+  openai:
+    type: openai
+    # api_key:  # or env OPENAI_API_KEY
+
+  anthropic:
+    type: anthropic
+    # api_key:  # or env ANTHROPIC_API_KEY
+
+arbiter:
+  # Stall-triggered escalation: first untried, usable, policy-allowed id
+  # wins; anything not listed follows default discovery order.
+  escalation: [ollama, local-mlx, zai, anthropic, openai]
+
+  policies:
+    - prefer:
+        provider: ollama
+      # Hard constraints (deny wins over allow, both win over explicit):
+      # deny_providers: [zai-coding]  # e.g. keep plan quota for interactive use

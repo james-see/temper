@@ -1,192 +1,196 @@
 # Roadmap
 
+> **Source of truth.** This file is Temper's authoritative plan. `PROJECT_PLAN.md` is a thin pointer into it (see that file). Statuses: `[done]` shipped, `[partial]` substantively started, `[next]` queued near-term follow-up, `[later]` not started. Evidence in parentheses.
+
 Temper's roadmap is intentionally layered: first prove **progress-aware supervision and recovery**, then expand into the surrounding control-plane features needed to run coding agents reliably across local, remote, interactive, and automated environments.
 
 The goal is not to become an IDE. The goal is to become the runtime that can sit underneath a CLI, TUI, editor, desktop app, CI job, remote worker, or automation trigger.
 
-## v0.1 — Runtime foundation
+---
+
+## v0.1 — Runtime foundation [done]
 
 Core execution primitives:
 
-- Go CLI
-- configuration loader and schema
-- append-only event store
-- run state machine
-- run inspection
-- git workspace abstraction
-- checkpoints and rollback
-- native agent loop
-- shell / read / write / patch / search / git tools
-- test and compile evaluator interface
-- structured logs and telemetry
-- cancellation and timeouts
-- artifact storage
+- Go CLI [done] (`cmd/temper`)
+- configuration loader and schema [done] (`internal/config`)
+- append-only event store [done] (`internal/store`, SQLite)
+- run state machine [done] (`internal/run` transitions)
+- run inspection [done] (`temper inspect <run-id>`)
+- git workspace abstraction [done] (`internal/workspace`)
+- checkpoints and rollback [done] (`Checkpoint`/`Rollback`)
+- native agent loop [done] (`drive`)
+- shell / read / write / patch / search / git tools [done] (`internal/agent/tools.go`)
+- test and compile evaluator interface [done] (`internal/evaluator`)
+- structured logs and telemetry [done] (`internal/debuglog`, events)
+- cancellation and timeouts [done]
+- artifact storage [done] (`internal/artifact`)
 
 Providers:
 
-- oMLX
-- Ollama
-- OpenAI-compatible endpoints
-- OpenAI
-- Anthropic
-- Gemini
+- oMLX [done] (`omlx` registry type)
+- Ollama [done]
+- OpenAI-compatible endpoints [done] (`openai` type + URL)
+- OpenAI [done]
+- Anthropic [done]
+- Gemini [done]
 
 Reflex baseline:
 
-- repeated-action detector
-- repeated-error fingerprint detector
-- basic recovery ladder
+- repeated-action detector [done]
+- repeated-error fingerprint detector [done]
+- basic recovery ladder [done]
 
-**Exit criterion:** Temper can execute and inspect a coding task, detect a simple loop, intervene, and verify the outcome.
+**Exit criterion:** Temper can execute and inspect a coding task, detect a simple loop, intervene, and verify the outcome. [done] (reflex uplift benchmark: 6/6 vs 0/6, VAL-2608)
 
 ---
 
-## v0.2 — Meta-harness and session continuity
+## v0.2 — Meta-harness and session continuity [done]
 
 First-class external agent adapters:
 
-- OpenCode
-- Claude Code
-- Codex
-- Cursor Agents
-- Hermes Agent
-- Muse Code
-- Goose
-- generic `exec` adapter (as capacity allows)
-- Aider adapters as capacity allows
+- OpenCode [done] (`internal/agent/opencode.go`)
+- Claude Code [done] (`claude_code.go`)
+- Codex [done] (`codex.go`)
+- Cursor Agents [done] (`cursor.go`)
+- Hermes Agent [done] (`hermes.go`)
+- Muse Code [done] (`muse.go`)
+- Goose [done] (`goose.go`)
+- generic `exec` adapter [done] (`exec.go`)
+- Aider adapters [later] (P1 candidate, no code)
 
 Agent runtime capabilities:
 
-- capability negotiation
-- model/provider override when supported
-- start / stop / interrupt
-- resumable sessions
-- persistent conversation/session IDs
-- agent status and lifecycle events
-- ~~session recovery after Temper restart~~ (`temper continue <run-id>`)
-- ~~prompt queuing while an agent is active~~ (`EnqueuePrompt` / TUI follow-up)
-- durable prompt drafts / pending input (partial: queue events; drafts UI later)
-- attachments and file references
-- plan / build / debug / custom execution modes where adapters expose them
-- subagent event capture
-- ~~clean handoff from one agent to another~~ (`switch_agent` recovery rung)
+- capability negotiation [partial] (`Capabilities` advertised and honored; no handshake protocol)
+- model/provider override when supported [done] (`ModelOverride`)
+- start / stop / interrupt [done] (`Start`/`Interrupt`; stop via interrupt + cancel)
+- resumable sessions [done] (`Resume`/`Bind`)
+- persistent conversation/session IDs [done]
+- agent status and lifecycle events [done] (`AgentStarted`/`SidecarBound`/`AgentSwitched`)
+- session recovery after Temper restart [done] (`temper continue <run-id>`)
+- prompt queuing while an agent is active [done] (follow-up input)
+- durable prompt drafts / pending input [next] (queue events exist; drafts UI missing)
+- attachments and file references [later] (no code)
+- plan / build / debug / custom execution modes [later] (no code)
+- subagent event capture [later] (capability flag only, not driven)
+- clean handoff from one agent to another [done] (`switch_agent` recovery rung)
 
-**Exit criterion:** one task can start in one agent, survive a restart, and be recovered or continued by another agent without losing workspace or execution history.
+**Exit criterion:** one task can start in one agent, survive a restart, and be recovered or continued by another agent without losing workspace or execution history. [done]
 
 ---
 
-## v0.3 — Workspace and git lifecycle
+## v0.3 — Workspace and git lifecycle [partial]
 
 Workspace management:
 
-- isolated git worktrees
-- existing-workspace mode
-- configurable worktree directories
-- base-branch / branch-strategy policies
-- task archive / restore / delete
-- deterministic teardown and orphan-process cleanup
-- disk-usage accounting and worktree cleanup
-- workspace lifecycle scripts
-- project-level environment variables
-- project / task configuration layering
-- file watching and repository invalidation
-- content search across workspace files
-- symlink/path handling
-- empty-repository bootstrap
+- isolated git worktrees [done] (`PrepareBranch`)
+- existing-workspace mode [done] (`Attach`)
+- configurable worktree directories [later] (fixed at `.temper/worktrees`)
+- base-branch / branch-strategy policies [done] (`branch_prefix`, `base_branch`)
+- task archive / restore / delete [done] (v0.4 lifecycle commands)
+- deterministic teardown and orphan-process cleanup [partial] (worktree removal yes; orphan processes no)
+- disk-usage accounting and worktree cleanup [done] (`DiskUsage`/`Orphans`)
+- workspace lifecycle scripts [later] (no code)
+- project-level environment variables [later] (no code)
+- project / task configuration layering [done] (files + env + flags)
+- file watching and repository invalidation [later] (no code)
+- content search across workspace files [done] (search tool)
+- symlink/path handling [done]
+- empty-repository bootstrap [later] (worktree setup assumes existing history)
 
-Git / forge lifecycle:
+Git / forge lifecycle (`internal/forge`, GitHub via `gh` only):
 
-- branch creation and publishing
-- fork workflows
-- commit creation and history
-- automatic pull-request detection
-- create draft / regular pull requests
-- synchronize PR state
-- mark ready / close / merge
-- base-branch resolution
-- changed-file and commit views
-- CI/check status ingestion
-- review comments and line comments
-- per-commit review data
-- multiple forge identities/accounts
-- enterprise/self-hosted forge support
+- branch creation and publishing [done] (`Publish`)
+- fork workflows [later] (attempt-branches are not repo forks)
+- commit creation and history [done] (checkpoints; history via git)
+- automatic pull-request detection [done] (`Forge.Find`)
+- create draft / regular pull requests [done] (`CreateOptions.Draft`)
+- synchronize PR state [done] (`Forge.Sync`)
+- mark ready / close / merge [next] (no `Forge` methods yet)
+- base-branch resolution [done] (`ResolveBase`)
+- changed-file and commit views [later] (no code)
+- CI/check status ingestion [done] (`Forge.Checks`)
+- review comments and line comments [next] (no code)
+- per-commit review data [later] (no code)
+- multiple forge identities/accounts [later] (single `gh` auth)
+- enterprise/self-hosted forge support [partial] (via `gh` host config, untested)
 
-**Exit criterion:** a Temper task has a complete, recoverable lifecycle from workspace creation through verified pull request.
+**Exit criterion:** a Temper task has a complete, recoverable lifecycle from workspace creation through verified pull request. [partial] (workspace side done; verified-PR loop needs merge ops)
 
 ---
 
-## v0.4 — Reflex: progress intelligence
+## v0.4 — Reflex: progress intelligence [done]
 
 Advanced observable-progress detection:
 
-- cyclic tool/action sequences
-- repeated error fingerprints
-- repository-state stagnation
-- test-score stagnation
-- compiler/linter stagnation
-- regression detection
-- token/cost burn without progress
-- planning-without-execution detection
-- file edit/revert oscillation
-- semantic stagnation
-- configurable per-project detectors
-- detector confidence and evidence trails
+- cyclic tool/action sequences [done] (`repeated-cycle`)
+- repeated error fingerprints [done] (`repeated-error`)
+- repository-state stagnation [done] (`repo-stagnation`, VAL-2609)
+- test-score stagnation [done] (`test-stagnation`, VAL-2609)
+- compiler/linter stagnation [done] (same fail-fingerprint detector covers both)
+- regression detection [done] (`evaluator-regression`, `edit-oscillation`)
+- token/cost burn without progress [done] (`token-burn`, `cost-burn`)
+- planning-without-execution detection [done] (`plan-without-exec`)
+- file edit/revert oscillation [done] (`edit-oscillation`)
+- semantic stagnation [later] (needs embeddings/LLM judge depth)
+- configurable per-project detectors [done] (`ReflexDetectors`)
+- detector confidence and evidence trails [done] (`Score` + `Evidence`)
 
 Recovery actions:
 
-- goal re-anchoring
-- ~~replan~~ (family-conditioned via `PreferRecovery`)
-- context compaction / failed-attempt summary (partial: replan prompt)
-- ~~critic/debugger invocation~~ (preferred for repeated-error / regression)
-- ~~model switch~~ (native real escalate; sidecar ModelOverride inject)
-- provider switch (via model escalate fallback)
-- ~~agent switch~~ (v0.2 handoff)
-- checkpoint rollback
-- alternate-approach fork
-- ~~human escalation~~ (preferred for `discover:*`)
-- intervention attempt limits / backoff
+- goal re-anchoring [done] (`recoveryPrompt`)
+- replan [done] (family-conditioned via `PreferRecovery`)
+- context compaction / failed-attempt summary [next] (replan prompt only)
+- critic/debugger invocation [done] (preferred for repeated-error / regression)
+- model switch [done] (native real escalate; sidecar ModelOverride inject)
+- provider switch [done] (via model escalate fallback)
+- agent switch [done] (v0.2 handoff)
+- checkpoint rollback [done] (VAL-2608)
+- alternate-approach fork [done] (VAL-2608, `ForkAttempt`)
+- human escalation [done] (preferred for `discover:*`)
+- intervention attempt limits / backoff [done] (VAL-2608, `LadderConfig`)
 
-**Partial (VAL-2672):** family-conditioned ladder selection + real `switch_model` escalate. Remaining: compact summaries, rollback/fork, Reflex benchmark suite.
+Shipped across VAL-2672 (family-conditioned selection), VAL-2609 (detectors), VAL-2608 (rollback/fork/limits + uplift benchmark). Remaining: semantic stagnation, full compaction summaries.
 
 ---
 
-## v0.5 — Arbiter: adaptive routing
+## v0.5 — Arbiter: adaptive routing [partial]
 
 Routing inputs:
 
-- task/repository classification
-- language/framework detection
-- agent capabilities
-- provider/model capabilities
-- context requirements
-- privacy constraints
-- cost budgets
-- latency targets
-- provider health
-- local resource availability
-- previous attempts
-- historical success
+- task/repository classification [partial] (follow-up classifier only)
+- language/framework detection [later] (no code)
+- agent capabilities [done] (`agent.Capabilities`)
+- provider/model capabilities [done] (static `provider.Capabilities`)
+- context requirements [later] (no code)
+- privacy constraints [partial] (`local_first` is the proxy; no constraint model)
+- cost budgets [done] (`MaxCostPerTask`)
+- latency targets [later] (no code)
+- provider health [done] (`Discover` liveness)
+- local resource availability [later] (no code)
+- previous attempts [done] (`tried` set)
+- historical success [later] (v0.11 work)
 
 Routing features:
 
-- deterministic policy rules
-- hard allow/deny constraints
-- local-first execution
-- fallback and escalation chains
-- planner / implementer / reviewer role assignment
-- model effort/reasoning controls
-- cost/token/latency accounting
-- candidate scoring and explainable routing rationale
-- provider health checks
-- model catalog and capability discovery
+- deterministic policy rules [done] (VAL-2611)
+- hard allow/deny constraints [done] (VAL-2611)
+- local-first execution [done] (VAL-2611, enforced)
+- fallback and escalation chains [done] (VAL-2611, `NextInChain`)
+- planner / implementer / reviewer role assignment [later] (no code)
+- model effort/reasoning controls [later] (no code)
+- cost/token/latency accounting [done] (VAL-2611, `Ledger`)
+- candidate scoring and explainable routing rationale [partial] (`Candidate.Score` is structural only; rationale narrated, emitted, and shown in TUI)
+- provider health checks [done] (discovery probes)
+- model catalog and capability discovery [partial] (per-provider `Models()`; no unified catalog)
 
-**Exit criterion:** Temper can select among local and hosted model/agent combinations, explain the selection, and automatically escalate when the initial strategy stalls.
+**Exit criterion:** Temper can select among local and hosted model/agent combinations, explain the selection, and automatically escalate when the initial strategy stalls. [done] (VAL-2611)
 
 ---
 
-## v0.6 — Extensibility, tools, skills, and policy
+## v0.6 — Extensibility, tools, skills, and policy [later]
 
-Protocols and extension points:
+Protocols and extension points (all [later]; `MCP`/`ACP` exist only as capability flags):
 
 - MCP local servers
 - MCP remote servers
@@ -198,7 +202,7 @@ Protocols and extension points:
 - reusable agent profiles / roles
 - reusable rules/instructions
 - reusable commands/prompts
-- plugin/hook API
+- plugin/hook API (note: orca agent hooks are external to Temper, not a Temper API)
 - lifecycle hooks
 - compaction hooks
 - event subscribers
@@ -207,26 +211,26 @@ Protocols and extension points:
 
 Permissions and policy:
 
-- allow / ask / deny rules
-- path-scoped file permissions
-- command-pattern shell permissions
-- external-directory controls
-- network controls
-- provider/model allow/deny policy
-- per-agent permissions
-- per-tool permissions
-- explicit auto-approval mode
-- secrets/environment filtering
-- secret redaction in events/logs
-- human approval boundaries
+- allow / ask / deny rules [partial] (shell deny patterns; no ask flow)
+- path-scoped file permissions [later]
+- command-pattern shell permissions [done] (`Shell.Deny`)
+- external-directory controls [later]
+- network controls [later]
+- provider/model allow/deny policy [done] (VAL-2611)
+- per-agent permissions [partial] (routing allow/deny; no tool-scoped per-agent perms)
+- per-tool permissions [later]
+- explicit auto-approval mode [partial] (`ReflexAuto` covers recovery)
+- secrets/environment filtering [later]
+- secret redaction in events/logs [partial] (`temper config` display only)
+- human approval boundaries [partial] (recovery approvals; no tool approvals)
 
-**Exit criterion:** a third party can add an agent, provider, tool, skill, hook, or policy without modifying Temper core.
+**Exit criterion:** a third party can add an agent, provider, tool, skill, hook, or policy without modifying Temper core. [later]
 
 ---
 
-## v0.7 — Remote and multi-machine execution
+## v0.7 — Remote and multi-machine execution [later]
 
-Remote workspace support:
+Remote workspace support (all [later], no code):
 
 - SSH workers
 - Tailscale-friendly SSH support
@@ -244,7 +248,7 @@ Remote workspace support:
 - CPU/RAM/GPU/disk/resource telemetry
 - remote process supervision and cleanup
 
-Execution environments:
+Execution environments (all [later], no code):
 
 - container/sandbox runner
 - isolated VM/cloud runner interface
@@ -258,19 +262,19 @@ Execution environments:
 
 Proof artifacts:
 
-- command/test logs
-- screenshots
-- browser artifacts
-- videos where supported
-- structured completion evidence
+- command/test logs [partial] (evaluator output stored as artifacts)
+- screenshots [later]
+- browser artifacts [later]
+- videos where supported [later]
+- structured completion evidence [later]
 
-**Exit criterion:** a run can move between local and remote execution targets while preserving the same Temper task/event model.
+**Exit criterion:** a run can move between local and remote execution targets while preserving the same Temper task/event model. [later]
 
 ---
 
-## v0.8 — Automations and external work sources
+## v0.8 — Automations and external work sources [later]
 
-Automations:
+Automations (all [later], no code):
 
 - scheduled recurring runs
 - event-triggered runs
@@ -284,7 +288,7 @@ Automations:
 - convert automation run into interactive task
 - notifications on success/failure/intervention
 
-Work-source integrations:
+Work-source integrations (all [later], no code; no `WorkSource` interface yet):
 
 - GitHub Issues / Pull Requests
 - GitLab issues / merge requests
@@ -297,43 +301,43 @@ Work-source integrations:
 - attachments and remote documents as task context
 - pluggable additional trackers/document systems
 
-**Exit criterion:** Temper can accept a task from an external system, schedule or trigger execution, create an isolated workspace, run an agent, verify it, and publish the resulting change.
+**Exit criterion:** Temper can accept a task from an external system, schedule or trigger execution, create an isolated workspace, run an agent, verify it, and publish the resulting change. [later]
 
 ---
 
-## v0.9 — Operator control surface
+## v0.9 — Operator control surface [partial]
 
 The control surface is for **observing and steering the runtime**, not replacing a developer's editor.
 
 CLI/TUI:
 
-- project/task/session browser
-- multiple conversations per task
-- agent/model/mode switchers
-- run timeline
-- Reflex intervention display
-- Arbiter decision display
-- prompt queue
-- command palette
-- prompt library
-- reusable task templates
-- notifications
-- resource monitor
-- searchable logs
+- project/task/session browser [partial] (session picker; no task browser)
+- multiple conversations per task [partial] (sessions pane)
+- agent/model/mode switchers [partial] (agent + model switching; no mode switcher)
+- run timeline [partial] (event log pane)
+- Reflex intervention display [done]
+- Arbiter decision display [done] (VAL-2611 `routing` line)
+- prompt queue [done] (follow-up input while running)
+- command palette [partial] (prefix menu)
+- prompt library [later]
+- reusable task templates [later]
+- notifications [later]
+- resource monitor [partial] (tokens/budget footer)
+- searchable logs [partial] (scroll; no search)
 
 Code/workspace inspection:
 
-- file tree
-- content search
-- git status
-- diff viewer
-- commit list
-- PR/check summaries
-- terminal sessions
-- persistent terminal scrollback
-- side-by-side/split views where useful
+- file tree [later]
+- content search [later] (agent tool only, no TUI view)
+- git status [later]
+- diff viewer [later]
+- commit list [later]
+- PR/check summaries [partial] (CLI `pr status`; no TUI view)
+- terminal sessions [later]
+- persistent terminal scrollback [later]
+- side-by-side/split views where useful [partial] (log/io/sessions panes)
 
-Preview/testing:
+Preview/testing (all [later], no code):
 
 - dev-server detection
 - local/remote port previews
@@ -342,99 +346,99 @@ Preview/testing:
 - authenticated preview profiles
 - UI annotation/target feedback as a later enhancement
 
-Optional clients:
+Optional clients (all [later], no code):
 
 - local web UI
 - Tauri + Svelte desktop client
 - editor extensions through protocol/API integration
 
-**Exit criterion:** an operator can understand what every active agent is doing, inspect evidence, steer execution, and intervene without reading raw logs.
+**Exit criterion:** an operator can understand what every active agent is doing, inspect evidence, steer execution, and intervene without reading raw logs. [partial] (live-run observe + steer done; evidence inspection mostly CLI/raw)
 
 ---
 
-## v0.10 — Evaluation, parallelism, and tournaments
+## v0.10 — Evaluation, parallelism, and tournaments [later]
 
-- parallel worktrees
-- parallel sub-tasks
-- workflow DAGs
-- planner / implementer / reviewer workflows
-- multiple candidate solutions
-- automated test/evaluator execution
-- LLM critic/judge as supplemental evidence
-- diff complexity scoring
-- candidate comparison
-- winning-solution selection
-- merge/rebase of parallel work
-- comparative agent/model analytics
-- benchmark packs
-- replay against historical tasks
+- parallel worktrees [later]
+- parallel sub-tasks [later]
+- workflow DAGs [later]
+- planner / implementer / reviewer workflows [later]
+- multiple candidate solutions [later]
+- automated test/evaluator execution [done] (evaluator runs every step)
+- LLM critic/judge as supplemental evidence [partial] (critic rung + SLM judge; not tournament-scoped)
+- diff complexity scoring [later]
+- candidate comparison [later]
+- winning-solution selection [later]
+- merge/rebase of parallel work [later]
+- comparative agent/model analytics [later]
+- benchmark packs [partial] (single reflex uplift benchmark)
+- replay against historical tasks [later]
 
-**Exit criterion:** Temper can execute multiple strategies for the same task and select a verified winner using explicit evaluation criteria.
-
----
-
-## v0.11 — Learn
-
-- policy version history
-- run/outcome dataset
-- strategy performance statistics
-- model/agent success priors
-- cost-normalized success metrics
-- local-vs-cloud escalation learning
-- Reflex threshold optimization
-- recovery-order optimization
-- workflow-combination scoring
-- offline historical replay
-- held-out benchmark evaluation
-- candidate policy generation
-- automatic recommendations
-- canary/opt-in policy rollout
-- rollback of policy versions
-- safe policy promotion
-- exploration budget / contextual-bandit experiments when data justifies them
-
-**Exit criterion:** historical data produces a policy change that improves held-out task performance without violating cost, privacy, or permission constraints.
+**Exit criterion:** Temper can execute multiple strategies for the same task and select a verified winner using explicit evaluation criteria. [later]
 
 ---
 
-## v1.0 — Reliable agent control plane
+## v0.11 — Learn [later]
+
+- policy version history [later]
+- run/outcome dataset [partial] (`RunTelemetry` schema only, VAL-2649; no collection)
+- strategy performance statistics [later]
+- model/agent success priors [later]
+- cost-normalized success metrics [later]
+- local-vs-cloud escalation learning [later]
+- Reflex threshold optimization [later]
+- recovery-order optimization [later]
+- workflow-combination scoring [later]
+- offline historical replay [later]
+- held-out benchmark evaluation [later]
+- candidate policy generation [later]
+- automatic recommendations [later]
+- canary/opt-in policy rollout [later]
+- rollback of policy versions [later]
+- safe policy promotion [later]
+- exploration budget / contextual-bandit experiments when data justifies them [later]
+
+**Exit criterion:** historical data produces a policy change that improves held-out task performance without violating cost, privacy, or permission constraints. [later]
+
+---
+
+## v1.0 — Reliable agent control plane [later]
 
 Stability and team-readiness:
 
-- stable public plugin/adapter APIs
-- migration/versioning strategy
-- robust restart/crash recovery
-- distributed run locking
-- idempotent side effects
-- budgets and quotas
-- audit trail
-- RBAC
-- shared organization policies
-- team agent/provider catalogs
-- shared skills/rules/templates
-- organization-wide routing policy
-- organization-level telemetry
-- cross-repository learning with privacy controls
-- hosted control-plane option
-- self-hosted server deployment
-- enterprise SSO/secrets integration
+- stable public plugin/adapter APIs [later]
+- migration/versioning strategy [later]
+- robust restart/crash recovery [partial] (`temper continue`; no crash recovery)
+- distributed run locking [later]
+- idempotent side effects [later]
+- budgets and quotas [partial] (per-task cost cap only)
+- audit trail [partial] (append-only event store; single-user)
+- RBAC [later]
+- shared organization policies [later]
+- team agent/provider catalogs [later]
+- shared skills/rules/templates [later]
+- organization-wide routing policy [later]
+- organization-level telemetry [later]
+- cross-repository learning with privacy controls [later]
+- hosted control-plane option [later]
+- self-hosted server deployment [later]
+- enterprise SSO/secrets integration [later]
 
 ## Cross-cutting requirements
 
 These apply throughout the roadmap rather than belonging to one release:
 
-- resumability over restart/reconnect
-- clear capability discovery rather than hard-coded assumptions
-- local-first support
-- observable state transitions
-- event-backed auditability
-- safe cancellation and process cleanup
-- cross-platform path/process handling
-- configuration migration
-- resource accounting
-- explicit permissions
-- human override at every autonomous layer
-- no dependence on hidden model reasoning for progress detection
+- resumability over restart/reconnect [partial] (`continue`; no reconnect layer)
+- clear capability discovery rather than hard-coded assumptions [partial] (some id-based locality remains)
+- local-first support [done]
+- observable state transitions [done] (transition events)
+- event-backed auditability [done] (SQLite event store)
+- safe cancellation and process cleanup [done]
+- cross-platform path/process handling [partial] (Go builds; Unix-centric paths)
+- configuration migration [later]
+- resource accounting [done] (ledger + disk usage)
+- explicit permissions [partial] (routing + shell deny; rest later)
+- human override at every autonomous layer [done] (human reflex mode + approvals)
+- no dependence on hidden model reasoning for progress detection [done] (heuristics-first judge)
 
 ## Product boundary
 

@@ -241,7 +241,14 @@ func (m *Manager) Checkpoint(msg string) (string, error) {
 	if !isGit(root) {
 		return "", nil
 	}
-	_ = run(root, "git", "add", "-A")
+	args := []string{"add", "-A"}
+	if rel := dataDirRel(root, m.DataDir); rel != "" {
+		// Never commit temper's own data dir (live sqlite store,
+		// worktrees, artifacts): a later reset --hard would delete the
+		// open database file from under the store.
+		args = append(args, "--", ".", ":!"+rel)
+	}
+	_ = run(root, "git", args...)
 	if err := run(root, "git", "-c", "user.email=temper@local", "-c", "user.name=temper", "commit", "--allow-empty", "-m", msg); err != nil {
 		return "", err
 	}
@@ -249,11 +256,53 @@ func (m *Manager) Checkpoint(msg string) (string, error) {
 	return strings.TrimSpace(out), err
 }
 
+// dataDirRel returns DataDir slash-relative to root for use as a git
+// exclusion pathspec, or "" when DataDir is unset, unresolvable, or outside
+// root (in which case checkpoints need no exclusion).
+func dataDirRel(root, dataDir string) string {
+	if strings.TrimSpace(dataDir) == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
 func (m *Manager) Rollback(hash string) error {
 	if hash == "" {
 		return fmt.Errorf("empty checkpoint")
 	}
 	return run(m.Root(), "git", "reset", "--hard", hash)
+}
+
+// ForkAttempt preserves the current workspace state on an attempt branch and
+// resets to hash, the last-good checkpoint. It returns the branch name.
+// Parallel execution is out of scope: the failed attempt survives on its
+// branch while the run continues from the checkpoint with a new approach.
+func (m *Manager) ForkAttempt(runID string, attempt int, hash string) (string, error) {
+	if strings.TrimSpace(hash) == "" {
+		return "", fmt.Errorf("empty checkpoint")
+	}
+	if !isGit(m.Root()) {
+		return "", fmt.Errorf("not a git workspace")
+	}
+	if _, err := m.Checkpoint(fmt.Sprintf("temper %s fork attempt %d", runID, attempt)); err != nil {
+		return "", err
+	}
+	branch := fmt.Sprintf("temper/%s/attempt-%d", runID, attempt)
+	if err := run(m.Root(), "git", "branch", "-f", branch); err != nil {
+		return "", err
+	}
+	if err := m.Rollback(hash); err != nil {
+		return "", err
+	}
+	return branch, nil
 }
 
 func (m *Manager) Diff() (string, error) {

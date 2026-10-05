@@ -21,14 +21,26 @@ func PreferRecovery(a Assessment) []string {
 	if hasReason(a, "repeated-action") || hasReason(a, "repeated-cycle") {
 		return []string{"replan", "critic", "switch_model", "switch_agent", "human"}
 	}
-	if hasReason(a, "token-burn") {
+	if hasReason(a, "token-burn") || hasReason(a, "cost-burn") {
 		return []string{"switch_model", "replan", "critic", "human"}
 	}
 	if hasReason(a, "stagnation") || hasReason(a, "semantic-stagnation") {
+		return []string{"replan", "rollback", "switch_model", "critic", "human"}
+	}
+	if hasReason(a, "repo-stagnation") {
+		return []string{"replan", "rollback", "switch_model", "human"}
+	}
+	if hasReason(a, "test-stagnation") {
+		return []string{"critic", "rollback", "replan", "human"}
+	}
+	if hasReason(a, "plan-without-exec") {
 		return []string{"replan", "switch_model", "critic", "human"}
 	}
+	if hasReason(a, "edit-oscillation") {
+		return []string{"rollback", "critic", "replan", "human"}
+	}
 	if a.State == Regressing || hasReason(a, "evaluator-regression") {
-		return []string{"critic", "replan", "human"}
+		return []string{"critic", "rollback", "replan", "human"}
 	}
 	return nil
 }
@@ -52,6 +64,9 @@ func (l *Ladder) NextFor(a Assessment) (string, bool) {
 	if l == nil {
 		return "", false
 	}
+	if l.MaxTotal > 0 && l.total >= l.MaxTotal {
+		return "", false
+	}
 	inLadder := map[string]bool{}
 	for _, s := range l.Steps {
 		inLadder[s] = true
@@ -60,8 +75,8 @@ func (l *Ladder) NextFor(a Assessment) (string, bool) {
 		if !inLadder[step] {
 			continue
 		}
-		if l.Attempts[step] < l.MaxEach {
-			l.Attempts[step]++
+		if l.Attempts[step] < l.cap(step) {
+			l.stamp(step)
 			return step, true
 		}
 	}
